@@ -34,21 +34,32 @@ class AppStrings {
     'connected': {'en': 'Connected:', 'it': 'Connesso:'},
     'start_time': {'en': 'Start Time', 'it': 'Ora inizio'},
     'end_time': {'en': 'End Time', 'it': 'Ora fine'},
-    'webhook_url_missing': {'en': 'Set a webhook URL first', 'it': 'Imposta prima un URL webhook'},
+    'webhook_url_missing': {
+      'en': 'Set a webhook URL first',
+      'it': 'Imposta prima un URL webhook',
+    },
     'permissions_required_title': {
       'en': 'Bluetooth & location permissions needed',
       'it': 'Permessi Bluetooth e posizione necessari',
     },
     'permissions_required_body': {
-      'en': 'This app needs Bluetooth and location permissions to find your power station. '
-          'Please enable them in system settings.',
-      'it': "L'app necessita dei permessi Bluetooth e posizione per trovare la tua power "
-          'station. Abilitali nelle impostazioni di sistema.',
+      'en': 'This app needs Bluetooth and location permissions to find your '
+          'power station. Please enable them in system settings.',
+      'it': "L'app necessita dei permessi Bluetooth e posizione per trovare "
+          'la tua power station. Abilitali nelle impostazioni di sistema.',
     },
     'open_settings': {'en': 'Open Settings', 'it': 'Apri impostazioni'},
     'no_devices_found': {
       'en': 'No devices found yet. Make sure your station is powered on and nearby.',
       'it': 'Nessun dispositivo trovato. Assicurati che la stazione sia accesa e vicina.',
+    },
+    'bluetooth_off_title': {
+      'en': 'Bluetooth is disabled',
+      'it': 'Bluetooth disattivato',
+    },
+    'bluetooth_off_body': {
+      'en': 'Please enable Bluetooth to connect to your Allpowers station.',
+      'it': 'Attiva il Bluetooth per connetterti alla tua stazione Allpowers.',
     },
   };
 

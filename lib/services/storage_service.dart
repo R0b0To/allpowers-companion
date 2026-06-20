@@ -15,6 +15,12 @@ class StorageService {
   static const _keyStartTime = 'start_time';
   static const _keyEndTime = 'end_time';
 
+  /// Persisted so that a disconnect/reconnect mid-charge cycle does not
+  /// re-trigger the low-battery sequence.
+  static const _keyChargingTriggered = 'charging_triggered';
+
+  // ── Device pairing ────────────────────────────────────────────────────────
+
   Future<String?> getSavedDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_keySavedDeviceId);
@@ -30,14 +36,18 @@ class StorageService {
     await prefs.remove(_keySavedDeviceId);
   }
 
+  // ── Automation settings ───────────────────────────────────────────────────
+
   Future<AutomationSettings> loadAutomationSettings() async {
     final prefs = await SharedPreferences.getInstance();
     return AutomationSettings(
       enabled: prefs.getBool(_keyAutoEnabled) ?? false,
       tapoOnUrl: prefs.getString(_keyTapoOnUrl) ?? '',
       tapoOffUrl: prefs.getString(_keyTapoOffUrl) ?? '',
-      lowThreshold: int.tryParse(prefs.getString(_keyLowThreshold) ?? '') ?? 10,
-      highThreshold: int.tryParse(prefs.getString(_keyHighThreshold) ?? '') ?? 95,
+      lowThreshold:
+          int.tryParse(prefs.getString(_keyLowThreshold) ?? '') ?? 10,
+      highThreshold:
+          int.tryParse(prefs.getString(_keyHighThreshold) ?? '') ?? 95,
       startTime: _parseTime(prefs.getString(_keyStartTime) ?? '21:00'),
       endTime: _parseTime(prefs.getString(_keyEndTime) ?? '08:00'),
     );
@@ -49,10 +59,25 @@ class StorageService {
     await prefs.setString(_keyTapoOnUrl, settings.tapoOnUrl);
     await prefs.setString(_keyTapoOffUrl, settings.tapoOffUrl);
     await prefs.setString(_keyLowThreshold, settings.lowThreshold.toString());
-    await prefs.setString(_keyHighThreshold, settings.highThreshold.toString());
+    await prefs.setString(
+        _keyHighThreshold, settings.highThreshold.toString());
     await prefs.setString(_keyStartTime, _formatTime(settings.startTime));
     await prefs.setString(_keyEndTime, _formatTime(settings.endTime));
   }
+
+  // ── Charging-triggered flag ───────────────────────────────────────────────
+
+  Future<bool> getChargingTriggered() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyChargingTriggered) ?? false;
+  }
+
+  Future<void> setChargingTriggered(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyChargingTriggered, value);
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   TimeOfDay _parseTime(String value) {
     try {
@@ -64,6 +89,7 @@ class StorageService {
   }
 
   String _formatTime(TimeOfDay time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return '${time.hour.toString().padLeft(2, '0')}:'
+        '${time.minute.toString().padLeft(2, '0')}';
   }
 }

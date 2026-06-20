@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../models/automation_settings.dart';
 import 'ble_service.dart';
+import 'storage_service.dart';
 import 'webhook_service.dart';
 
 /// Runs the "smart charging" handshake:
@@ -12,30 +13,54 @@ import 'webhook_service.dart';
 ///  - When the battery reaches the high limit, fire the "charger off"
 ///    webhook and leave AC on.
 ///
+/// Reconnect-safe design
+/// ─────────────────────
+/// [_chargingTriggered] is persisted to [StorageService] so that if the
+/// station disconnects and reconnects at a slightly higher level (e.g.
+/// triggered at 8 %, reconnected at 9 %) the engine does **not** fire the
+/// low-battery sequence a second time. It is only cleared (both in memory
+/// and on disk) once the battery actually reaches the high threshold.
+///
 /// A lock ([_sequenceRunning]) prevents two sequences from overlapping if
 /// status packets arrive faster than a sequence completes.
 class AutomationEngine {
-  AutomationEngine(this._ble, this._webhooks);
+  AutomationEngine(this._ble, this._webhooks, this._storage);
 
   final BleService _ble;
   final WebhookService _webhooks;
+  final StorageService _storage;
 
   bool _chargingTriggered = false;
   bool _sequenceRunning = false;
+  bool _initialized = false;
+
+  /// Must be called once before [evaluate] so that the persisted
+  /// [_chargingTriggered] flag is loaded from disk.
+  Future<void> init() async {
+    _chargingTriggered = await _storage.getChargingTriggered();
+    _initialized = true;
+    debugPrint('AutomationEngine: init – chargingTriggered=$_chargingTriggered');
+  }
 
   Future<void> evaluate(AutomationSettings settings) async {
+    if (!_initialized) return;
     if (!settings.enabled) return;
     if (!settings.isTimeInWindow(TimeOfDay.now())) return;
 
     final batteryLevel = _ble.status.batteryLevel;
+    if (batteryLevel <= 0) return; // ignore bogus readings
 
+    // ── Low threshold: start charging ──────────────────────────────────────
+    // Guard: only trigger if we haven't already done so since the last full
+    // charge. This survives disconnects/reconnects because the flag is
+    // persisted to disk in _runLowBatterySequence.
     if (batteryLevel <= settings.lowThreshold &&
-        batteryLevel > 0 &&
         !_chargingTriggered &&
         !_sequenceRunning) {
       await _runLowBatterySequence(settings);
     }
 
+    // ── High threshold: stop charging ──────────────────────────────────────
     if (batteryLevel >= settings.highThreshold && _chargingTriggered) {
       await _runFullyChargedSequence(settings);
     }
@@ -43,7 +68,12 @@ class AutomationEngine {
 
   Future<void> _runLowBatterySequence(AutomationSettings settings) async {
     _sequenceRunning = true;
+
+    // Persist before doing anything async so that even if we crash mid-
+    // sequence or the device disconnects, we won't re-trigger on reconnect.
     _chargingTriggered = true;
+    await _storage.setChargingTriggered(true);
+
     debugPrint('Automation: low battery threshold hit, starting sequence.');
 
     try {
@@ -65,6 +95,8 @@ class AutomationEngine {
         await _ble.setAc(true);
         debugPrint('Automation: AC outlets back on.');
       }
+    } catch (e) {
+      debugPrint('Automation: error in low battery sequence: $e');
     } finally {
       _sequenceRunning = false;
     }
@@ -72,6 +104,7 @@ class AutomationEngine {
 
   Future<void> _runFullyChargedSequence(AutomationSettings settings) async {
     _chargingTriggered = false;
+    await _storage.setChargingTriggered(false);
 
     if (!_ble.status.isAcOn) {
       await _ble.setAc(true);
