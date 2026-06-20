@@ -10,6 +10,12 @@ class AutomationSettings {
     this.highThreshold = 95,
     this.startTime = const TimeOfDay(hour: 21, minute: 0),
     this.endTime = const TimeOfDay(hour: 8, minute: 0),
+    
+    // New Local Tapo Settings
+    this.useLocalTapo = false,
+    this.tapoIp = '',
+    this.tapoEmail = '',
+    this.tapoPassword = '',
   });
 
   final bool enabled;
@@ -20,6 +26,12 @@ class AutomationSettings {
   final TimeOfDay startTime;
   final TimeOfDay endTime;
 
+  // New Local Tapo Fields
+  final bool useLocalTapo;
+  final String tapoIp;
+  final String tapoEmail;
+  final String tapoPassword;
+
   AutomationSettings copyWith({
     bool? enabled,
     String? tapoOnUrl,
@@ -28,6 +40,10 @@ class AutomationSettings {
     int? highThreshold,
     TimeOfDay? startTime,
     TimeOfDay? endTime,
+    bool? useLocalTapo,
+    String? tapoIp,
+    String? tapoEmail,
+    String? tapoPassword,
   }) {
     return AutomationSettings(
       enabled: enabled ?? this.enabled,
@@ -37,6 +53,12 @@ class AutomationSettings {
       highThreshold: highThreshold ?? this.highThreshold,
       startTime: startTime ?? this.startTime,
       endTime: endTime ?? this.endTime,
+      
+      // Local Tapo Fields
+      useLocalTapo: useLocalTapo ?? this.useLocalTapo,
+      tapoIp: tapoIp ?? this.tapoIp,
+      tapoEmail: tapoEmail ?? this.tapoEmail,
+      tapoPassword: tapoPassword ?? this.tapoPassword,
     );
   }
 

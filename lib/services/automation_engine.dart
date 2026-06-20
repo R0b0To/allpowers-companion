@@ -5,13 +5,15 @@ import '../models/automation_settings.dart';
 import 'ble_service.dart';
 import 'storage_service.dart';
 import 'webhook_service.dart';
+import 'tapo_service.dart'; 
 
 /// Runs the "smart charging" handshake:
 ///  - When the battery drops to the configured low limit, briefly cut the
-///    AC outlets, fire the "charger on" webhook, wait for the plug to
-///    physically power up, then restore AC.
-///  - When the battery reaches the high limit, fire the "charger off"
-///    webhook and leave AC on.
+///    AC outlets, fire the local Tapo plug command (or the "charger on"
+///    webhook as a fallback), wait for the plug to physically power up,
+///    then restore AC.
+///  - When the battery reaches the high limit, turn off the local Tapo plug
+///    (or fire the "charger off" webhook as a fallback) and leave AC on.
 ///
 /// Reconnect-safe design
 /// ─────────────────────
@@ -24,10 +26,11 @@ import 'webhook_service.dart';
 /// A lock ([_sequenceRunning]) prevents two sequences from overlapping if
 /// status packets arrive faster than a sequence completes.
 class AutomationEngine {
-  AutomationEngine(this._ble, this._webhooks, this._storage);
+  AutomationEngine(this._ble, this._webhooks, this._tapo, this._storage);
 
   final BleService _ble;
   final WebhookService _webhooks;
+  final TapoService _tapo; // Added TapoService field
   final StorageService _storage;
 
   bool _chargingTriggered = false;
@@ -85,8 +88,25 @@ class AutomationEngine {
       // Let the relay fully isolate the load before the charger powers up.
       await Future.delayed(const Duration(seconds: 5));
 
-      await _webhooks.fire(settings.tapoOnUrl);
-      debugPrint('Automation: charger ON webhook fired.');
+      bool localSuccess = false;
+      if (settings.useLocalTapo) {
+        debugPrint('Automation: Attempting direct local Tapo ON command.');
+        localSuccess = await _tapo.setOn(
+          ip: settings.tapoIp,
+          email: settings.tapoEmail,
+          password: settings.tapoPassword,
+          on: true,
+        );
+      }
+
+      // Fallback if local Tapo is disabled or failed
+      if (!localSuccess) {
+        debugPrint('Automation: Direct local control failed or bypassed. Executing fallback ON webhook.');
+        await _webhooks.fire(settings.tapoOnUrl);
+        debugPrint('Automation: charger ON webhook fired.');
+      } else {
+        debugPrint('Automation: Direct local Tapo ON command succeeded.');
+      }
 
       // Give the charger time to complete its power-delivery handshake.
       await Future.delayed(const Duration(seconds: 10));
@@ -109,7 +129,25 @@ class AutomationEngine {
     if (!_ble.status.isAcOn) {
       await _ble.setAc(true);
     }
-    await _webhooks.fire(settings.tapoOffUrl);
-    debugPrint('Automation: fully charged, charger OFF webhook fired.');
+
+    bool localSuccess = false;
+    if (settings.useLocalTapo) {
+      debugPrint('Automation: Attempting direct local Tapo OFF command.');
+      localSuccess = await _tapo.setOn(
+        ip: settings.tapoIp,
+        email: settings.tapoEmail,
+        password: settings.tapoPassword,
+        on: false,
+      );
+    }
+
+    // Fallback if local Tapo is disabled or failed
+    if (!localSuccess) {
+      debugPrint('Automation: Direct local control failed or bypassed. Executing fallback OFF webhook.');
+      await _webhooks.fire(settings.tapoOffUrl);
+      debugPrint('Automation: fully charged, charger OFF webhook fired.');
+    } else {
+      debugPrint('Automation: Direct local Tapo OFF command succeeded.');
+    }
   }
 }

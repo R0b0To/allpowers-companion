@@ -5,9 +5,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
 /// A settings text field that debounces its `onChangedDebounced` callback
-/// so we don't hit SharedPreferences on every single keystroke (the
-/// original implementation called `setState` + a full preferences write on
-/// every character typed).
+/// so we don't hit SharedPreferences on every single keystroke.
 class DebouncedSettingsField extends StatefulWidget {
   const DebouncedSettingsField({
     super.key,
@@ -17,6 +15,7 @@ class DebouncedSettingsField extends StatefulWidget {
     required this.onChangedDebounced,
     this.keyboardType = TextInputType.text,
     this.suffixIcon,
+    this.readOnly = false, // Added readOnly property
   });
 
   final TextEditingController controller;
@@ -25,6 +24,7 @@ class DebouncedSettingsField extends StatefulWidget {
   final VoidCallback onChangedDebounced;
   final TextInputType keyboardType;
   final Widget? suffixIcon;
+  final bool readOnly; // Declared readOnly field
 
   @override
   State<DebouncedSettingsField> createState() => _DebouncedSettingsFieldState();
@@ -50,6 +50,7 @@ class _DebouncedSettingsFieldState extends State<DebouncedSettingsField> {
       controller: widget.controller,
       onChanged: _onChanged,
       keyboardType: widget.keyboardType,
+      readOnly: widget.readOnly, // Passed readOnly to the native TextField
       style: const TextStyle(fontSize: 13, color: Colors.white70),
       decoration: InputDecoration(
         labelText: widget.label,

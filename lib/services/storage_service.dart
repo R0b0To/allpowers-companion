@@ -15,6 +15,12 @@ class StorageService {
   static const _keyStartTime = 'start_time';
   static const _keyEndTime = 'end_time';
 
+  // New local Tapo preference keys
+  static const _keyUseLocalTapo = 'use_local_tapo';
+  static const _keyTapoIp = 'tapo_ip';
+  static const _keyTapoEmail = 'tapo_email';
+  static const _keyTapoPassword = 'tapo_password';
+
   /// Persisted so that a disconnect/reconnect mid-charge cycle does not
   /// re-trigger the low-battery sequence.
   static const _keyChargingTriggered = 'charging_triggered';
@@ -50,6 +56,12 @@ class StorageService {
           int.tryParse(prefs.getString(_keyHighThreshold) ?? '') ?? 95,
       startTime: _parseTime(prefs.getString(_keyStartTime) ?? '21:00'),
       endTime: _parseTime(prefs.getString(_keyEndTime) ?? '08:00'),
+      
+      // Load direct Tapo settings
+      useLocalTapo: prefs.getBool(_keyUseLocalTapo) ?? false,
+      tapoIp: prefs.getString(_keyTapoIp) ?? '',
+      tapoEmail: prefs.getString(_keyTapoEmail) ?? '',
+      tapoPassword: prefs.getString(_keyTapoPassword) ?? '',
     );
   }
 
@@ -63,6 +75,12 @@ class StorageService {
         _keyHighThreshold, settings.highThreshold.toString());
     await prefs.setString(_keyStartTime, _formatTime(settings.startTime));
     await prefs.setString(_keyEndTime, _formatTime(settings.endTime));
+
+    // Save direct Tapo settings
+    await prefs.setBool(_keyUseLocalTapo, settings.useLocalTapo);
+    await prefs.setString(_keyTapoIp, settings.tapoIp);
+    await prefs.setString(_keyTapoEmail, settings.tapoEmail);
+    await prefs.setString(_keyTapoPassword, settings.tapoPassword);
   }
 
   // ── Charging-triggered flag ───────────────────────────────────────────────

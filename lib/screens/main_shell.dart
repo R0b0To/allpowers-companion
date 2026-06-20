@@ -8,6 +8,7 @@ import '../services/ble_service.dart';
 import '../services/notification_service.dart';
 import '../services/storage_service.dart';
 import '../services/webhook_service.dart';
+import '../services/tapo_service.dart'; // 1. Import TapoService
 import 'control_tab.dart';
 import 'automations_tab.dart';
 
@@ -25,9 +26,12 @@ class _MainShellState extends State<MainShell> {
   final _storage = StorageService();
   final _notifications = NotificationService();
   final _webhooks = WebhookService();
+  final _tapo = TapoService(); // 2. Instantiate TapoService
   late final BleService _ble = BleService(_storage);
+  
+  // 3. Pass _tapo to your AutomationEngine so it can execute local control
   late final AutomationEngine _automation =
-      AutomationEngine(_ble, _webhooks, _storage);
+      AutomationEngine(_ble, _webhooks, _tapo, _storage);
 
   AutomationSettings _settings = const AutomationSettings();
   bool _permissionsPermanentlyDenied = false;
@@ -98,6 +102,7 @@ class _MainShellState extends State<MainShell> {
             strings: strings,
             settings: _settings,
             webhooks: _webhooks,
+            tapo: _tapo, // 4. Pass the TapoService singleton to AutomationsTab
             onSettingsChanged: _persistSettings,
           ),
         ],
