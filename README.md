@@ -1,4 +1,1 @@
-# ap_companion
-
-A new Flutter project.
-# allpowers-companion
+An unofficial Flutter client for ALLPOWERS batteries, providing BLE connectivity, battery management, telemetry, and automation capabilities.
