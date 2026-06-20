@@ -57,7 +57,7 @@ class ToggleCard extends StatelessWidget {
                 width: 28,
                 height: 14,
                 decoration: BoxDecoration(
-                  color: isActive ? activeColor.withOpacity(0.3) : AppColors.track,
+                  color: isActive ? activeColor.withOpacity(0.3) : AppColors.border,
                   borderRadius: BorderRadius.circular(7),
                 ),
                 alignment: isActive ? Alignment.centerRight : Alignment.centerLeft,

@@ -1,39 +1,64 @@
 /// Byte-level constants for the Allpowers BLE protocol.
 ///
-/// NOTE: the "request status" handshake packet sends `0xb1` at offset 2,
-/// while the "set socket state" command sends it at offset 3 (with a 0x00
-/// swapped into offset 2). This mirrors the original implementation as-is
-/// since there's no protocol spec to verify against here -- if outlet
-/// toggles ever stop working, this header ordering is the first thing to
-/// check against your station's actual documentation.
-class BleConstants {
-  BleConstants._();
-
-  /// Substrings used to identify the read/write characteristics among a
-  /// device's services, since exact UUIDs can vary slightly by firmware.
+/// ## Header ordering note
+/// The "request status" handshake packet sends `0xb1` at offset 2 and
+/// `0x00` at offset 3. The "set socket state" command swaps these — `0x00`
+/// at offset 2, `0xb1` at offset 3. This mirrors the original implementation
+/// exactly; if outlet toggles stop working, this header ordering is the
+/// first thing to verify against live packet captures.
+///
+/// ## Characteristic discovery
+/// UUIDs vary slightly across firmware versions, so we match by substring
+/// rather than exact equality. A device may expose multiple services; we
+/// take the last matching characteristic found (later services tend to be
+/// the application-level ones on Allpowers hardware).
+abstract final class BleConstants {
+  // ── Characteristic UUID substrings ─────────────────────────────────────────
   static const List<String> readCharacteristicHints = ['fff1', 'ffe1'];
   static const List<String> writeCharacteristicHints = ['fff2', 'ffe2'];
 
+  // ── Packet framing ─────────────────────────────────────────────────────────
   static const int header1 = 0xa5;
   static const int header2 = 0x65;
 
-  /// Sent once right after connecting, to subscribe to periodic status
-  /// packets from the station.
+  // ── Commands ───────────────────────────────────────────────────────────────
+
+  /// Sent once after connecting. Subscribes to periodic status broadcasts.
   static const List<int> requestStatusCommand = [
     header1, header2, 0xb1, 0x00, 0x01, 0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
   ];
 
-  /// Packet type byte (offset 5) identifying a full status report.
+  // ── Status packet structure ─────────────────────────────────────────────────
+  /// Value at byte [5] that identifies a full status report packet.
   static const int statusPacketType = 0x08;
+
+  /// Minimum valid length for a status packet.
   static const int minStatusPacketLength = 16;
 
-  // Offsets within a status packet.
+  // Byte offsets within a status packet.
   static const int socketMaskOffset = 7;
   static const int batteryLevelOffset = 8;
-  static const int inputWattsHighByteOffset = 9;
-  static const int outputWattsHighByteOffset = 11;
+  static const int inputWattsHighByteOffset = 9;   // High byte; low byte at offset 10.
+  static const int outputWattsHighByteOffset = 11; // High byte; low byte at offset 12.
 
+  // ── Socket bitmask values ──────────────────────────────────────────────────
   static const int usbMask = 0x01;
   static const int acMask = 0x02;
   static const int dcMask = 0x04;
+
+  // ── Timing ────────────────────────────────────────────────────────────────
+  /// After a manual outlet command, status packets received within this
+  /// window must not overwrite the optimistic local state — the station
+  /// can take several packets to reflect the relay change.
+  static const Duration manualOverrideWindow = Duration(milliseconds: 1500);
+
+  /// Grace delay before retrying an auto-connect after an unexpected
+  /// disconnect, to let the OS fully tear down the prior connection.
+  static const Duration reconnectDelay = Duration(seconds: 2);
+
+  /// Maximum time to wait for a device to respond during auto-connect.
+  static const Duration autoConnectTimeout = Duration(seconds: 20);
+
+  /// BLE scan duration before automatically stopping.
+  static const Duration scanDuration = Duration(seconds: 60);
 }

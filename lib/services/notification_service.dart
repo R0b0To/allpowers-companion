@@ -1,23 +1,52 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Wraps local notifications. Unlike the original implementation, this only
-/// fires a low-battery alert once per "drop below threshold" event instead
-/// of on every single BLE status packet (which could arrive several times
-/// a second) -- the alert resets once the level rises back above it.
-class NotificationService {
-  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+import '../utils/logger.dart';
+
+/// Wraps local notifications for the app.
+///
+/// ## Low-battery debouncing
+/// The alert fires exactly once per "drop below threshold" event. It resets
+/// only after the battery climbs back above the threshold, preventing
+/// notification spam on every BLE packet while at low charge.
+///
+/// ## Notification IDs
+/// We use fixed IDs so re-posting the same logical notification replaces
+/// the previous one rather than stacking new entries in the drawer.
+final class NotificationService {
+  final _plugin = FlutterLocalNotificationsPlugin();
   bool _lowBatteryAlertActive = false;
+  bool _initialized = false;
+
+  static const int _lowBatteryNotificationId = 1;
 
   Future<void> init() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosSettings = DarwinInitializationSettings();
-    const initSettings = InitializationSettings(android: androidSettings, iOS: iosSettings);
-    await _plugin.initialize(initSettings);
+    try {
+      const androidSettings =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const iosSettings = DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+      );
+      const initSettings =
+          InitializationSettings(android: androidSettings, iOS: iosSettings);
+
+      await _plugin.initialize(initSettings);
+      _initialized = true;
+      Log.i('NotificationService', 'Initialized');
+    } catch (e) {
+      Log.e('NotificationService', 'Init failed', e);
+    }
   }
 
-  /// Call this on every status update. Only emits a notification the
-  /// moment the level first crosses at or below [threshold].
+  /// Call this on every BLE status update.
+  ///
+  /// Fires a notification only when the battery first crosses below
+  /// [threshold]; resets the guard once the level rises above it.
   Future<void> handleBatteryLevel(int level, {int threshold = 20}) async {
+    if (!_initialized) return;
+
+    // Ignore bogus zero readings (common before the first real packet).
     if (level <= 0) return;
 
     if (level <= threshold) {
@@ -31,15 +60,32 @@ class NotificationService {
   }
 
   Future<void> _showLowBatteryNotification(int level) async {
-    const androidDetails = AndroidNotificationDetails(
-      'battery_warnings',
-      'Battery warnings',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
-    const iosDetails = DarwinNotificationDetails();
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    try {
+      const androidDetails = AndroidNotificationDetails(
+        'battery_warnings',
+        'Battery warnings',
+        channelDescription: 'Alerts when the power station battery is low',
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+      );
+      const iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+      const details =
+          NotificationDetails(android: androidDetails, iOS: iosDetails);
 
-    await _plugin.show(1, '⚠️ Low battery', '$level%', details);
+      await _plugin.show(
+        _lowBatteryNotificationId,
+        '⚡ Low battery',
+        'Power station is at $level% — charge soon.',
+        details,
+      );
+      Log.i('NotificationService', 'Low battery notification shown ($level%)');
+    } catch (e) {
+      Log.e('NotificationService', 'Failed to show notification', e);
+    }
   }
 }

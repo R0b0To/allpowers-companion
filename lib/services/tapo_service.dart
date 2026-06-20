@@ -2,105 +2,123 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 import 'package:pointycastle/export.dart';
 
-class TapoService {
-  // Use native HttpClient instead of package:http to control header case sensitivity
-  final HttpClient _client = HttpClient();
+import '../utils/logger.dart';
+
+/// Controls a TP-Link Tapo smart plug via the local KLAP protocol.
+///
+/// ## Security
+/// - Credentials are never logged (not even partially). See inline comments.
+/// - The session key, IV, and signature prefix are never logged — they are
+///   live encryption material for an active session.
+/// - On any error, the session is reset to force a clean re-handshake.
+///
+/// ## Session management
+/// Sessions are keyed by `"ip:email"` and reused across calls. Call
+/// [resetSession] if you need to force a fresh handshake (e.g. after a
+/// settings change).
+final class TapoService {
+  final HttpClient _httpClient = HttpClient();
   final Map<String, _TapoSession> _sessions = {};
 
-  _TapoSession _getSession(String ip, String email, String password) {
-    String cleanIp = ip.trim();
-    if (cleanIp.startsWith('http://')) {
-      cleanIp = cleanIp.substring(7);
-    } else if (cleanIp.startsWith('https://')) {
-      cleanIp = cleanIp.substring(8);
-    }
-    if (cleanIp.endsWith('/')) {
-      cleanIp = cleanIp.substring(0, cleanIp.length - 1);
-    }
-
-    final sessionKey = '$cleanIp:$email';
-    if (!_sessions.containsKey(sessionKey)) {
-      _sessions[sessionKey] = _TapoSession(
-        ip: cleanIp,
-        email: email,
-        password: password,
-        client: _client,
-      );
-    }
-    return _sessions[sessionKey]!;
+  _TapoSession _getOrCreateSession(String ip, String email, String password) {
+    final cleanIp = _normalizeIp(ip);
+    final key = '$cleanIp:$email';
+    return _sessions.putIfAbsent(
+      key,
+      () => _TapoSession(ip: cleanIp, email: email, password: password, client: _httpClient),
+    );
   }
 
-  /// Establishes/validates the connection to the Tapo plug and returns details.
+  /// Strips protocol prefix and trailing slash from an IP/hostname string.
+  static String _normalizeIp(String ip) {
+    var clean = ip.trim();
+    if (clean.startsWith('https://')) clean = clean.substring(8);
+    if (clean.startsWith('http://')) clean = clean.substring(7);
+    if (clean.endsWith('/')) clean = clean.substring(0, clean.length - 1);
+    return clean;
+  }
+
+  /// Clears any cached session for the given credentials, forcing a fresh
+  /// KLAP handshake on the next call. Call this after credential changes.
+  void resetSession({required String ip, required String email}) {
+    _sessions.remove('${_normalizeIp(ip)}:$email');
+  }
+
+  /// Tests connectivity and returns a human-readable result string.
+  ///
+  /// Forces a fresh handshake so this always reflects the current state
+  /// of the plug and credentials.
   Future<String> test({
     required String ip,
     required String email,
     required String password,
   }) async {
-    debugPrint('[TapoService] Starting connection test to $ip');
+    final session = _getOrCreateSession(ip, email, password);
+    session.reset(); // Fresh handshake for accurate test.
+
     try {
-      final session = _getSession(ip, email, password);
-      session.reset(); // Force a fresh handshake for the test
-
       final info = await session.getDeviceInfo();
-
-      String nickname = 'Unknown';
-      if (info['nickname'] != null) {
-        try {
-          nickname = utf8.decode(base64.decode(info['nickname'] as String));
-        } catch (_) {
-          nickname = info['nickname'] as String;
-        }
-      }
-      final model = info['model'] ?? 'Unknown';
-      final isOn = info['device_on'] ?? false;
-
-      final successMsg = 'Connected successfully to Tapo $model ($nickname). State: ${isOn ? 'ON' : 'OFF'}.';
-      debugPrint('[TapoService] Test completed successfully.');
-      return successMsg;
-    } catch (e, stack) {
-      debugPrint('[TapoService] Test failed: $e');
-      debugPrint('$stack');
-      return 'Failed to connect: $e';
+      final nickname = _decodeNickname(info['nickname']);
+      final model = info['model'] as String? ?? 'Unknown';
+      final isOn = info['device_on'] as bool? ?? false;
+      return 'Connected to Tapo $model ($nickname) — ${isOn ? 'ON' : 'OFF'}';
+    } catch (e) {
+      Log.e('TapoService', 'Connection test failed', e);
+      return 'Connection failed: ${_friendlyError(e)}';
     }
   }
 
-  /// Sets the state (on/off) of the smart plug.
+  /// Sets the on/off state of the smart plug.
+  ///
+  /// Returns true on success. On failure, the session is reset so the next
+  /// attempt performs a clean re-handshake.
   Future<bool> setOn({
     required String ip,
     required String email,
     required String password,
     required bool on,
   }) async {
-    debugPrint('[TapoService] Setting state to: ${on ? 'ON' : 'OFF'}');
+    final session = _getOrCreateSession(ip, email, password);
     try {
-      final session = _getSession(ip, email, password);
       await session.setDeviceStatus(on);
-      debugPrint('[TapoService] State set successful.');
+      Log.i('TapoService', 'Plug set to ${on ? "ON" : "OFF"}');
       return true;
-    } catch (e, stack) {
-      debugPrint('[TapoService] setOn failed: $e');
-      debugPrint('$stack');
+    } catch (e) {
+      Log.e('TapoService', 'setOn failed', e);
       return false;
     }
   }
+
+  String _decodeNickname(dynamic raw) {
+    if (raw == null) return 'Unknown';
+    try {
+      return utf8.decode(base64.decode(raw as String));
+    } catch (_) {
+      return raw.toString();
+    }
+  }
+
+  String _friendlyError(Object e) {
+    final msg = e.toString();
+    if (msg.contains('Connection refused') || msg.contains('Failed host lookup')) {
+      return 'Plug not reachable — check the IP address';
+    }
+    if (msg.contains('authenticate')) return 'Authentication failed — check your credentials';
+    if (msg.contains('TimeoutException') || msg.contains('timed out')) {
+      return 'Request timed out';
+    }
+    return msg.length > 80 ? '${msg.substring(0, 80)}…' : msg;
+  }
 }
 
-class _TapoSession {
-  final String ip;
-  final String email;
-  final String password;
-  final HttpClient client;
+// ── Internal session implementation ────────────────────────────────────────────
 
-  Uint8List? key;
-  Uint8List? iv;
-  int seq = 0;
-  Uint8List? sigPrefix;
-  String? _cookie;
-
+final class _TapoSession {
   _TapoSession({
     required this.ip,
     required this.email,
@@ -108,164 +126,163 @@ class _TapoSession {
     required this.client,
   });
 
+  final String ip;
+  final String email;
+  final String password;
+  final HttpClient client;
+
+  // KLAP session state — intentionally never logged anywhere in this file.
+  Uint8List? _key;
+  Uint8List? _iv;
+  int _seq = 0;
+  Uint8List? _sigPrefix;
+  String? _cookie;
+
   void reset() {
-    key = null;
-    iv = null;
-    seq = 0;
-    sigPrefix = null;
+    _key = null;
+    _iv = null;
+    _seq = 0;
+    _sigPrefix = null;
     _cookie = null;
   }
 
-  // --- Cryptographic and Hashing Helpers ---
+  bool get _isInitialized => _key != null;
 
-  Uint8List _sha1(List<int> bytes) {
-    return Uint8List.fromList(crypto.sha1.convert(bytes).bytes);
-  }
+  // ── Crypto helpers ──────────────────────────────────────────────────────────
 
-  Uint8List _sha256(List<int> bytes) {
-    return Uint8List.fromList(crypto.sha256.convert(bytes).bytes);
-  }
+  Uint8List _sha1(List<int> bytes) =>
+      Uint8List.fromList(crypto.sha1.convert(bytes).bytes);
 
-  Uint8List _calcAuthHash(String username, String password) {
-    final uSha1 = _sha1(utf8.encode(username));
-    final pSha1 = _sha1(utf8.encode(password));
-    final combined = Uint8List(uSha1.length + pSha1.length);
-    combined.setAll(0, uSha1);
-    combined.setAll(uSha1.length, pSha1);
+  Uint8List _sha256(List<int> bytes) =>
+      Uint8List.fromList(crypto.sha256.convert(bytes).bytes);
+
+  Uint8List _calcAuthHash(String username, String pw) {
+    final uHash = _sha1(utf8.encode(username));
+    final pHash = _sha1(utf8.encode(pw));
+    final combined = Uint8List(uHash.length + pHash.length)
+      ..setAll(0, uHash)
+      ..setAll(uHash.length, pHash);
     return _sha256(combined);
   }
 
-  Uint8List _getRandomBytes(int count) {
-    final random = Random.secure();
-    final list = Uint8List(count);
-    for (int i = 0; i < count; i++) {
-      list[i] = random.nextInt(256);
-    }
-    return list;
+  Uint8List _randomBytes(int count) {
+    final rng = Random.secure();
+    return Uint8List.fromList(List.generate(count, (_) => rng.nextInt(256)));
   }
 
-  bool _listEquals(List<int> a, List<int> b) {
-    if (identical(a, b)) return true;
+  bool _bytesEqual(List<int> a, List<int> b) {
     if (a.length != b.length) return false;
-    for (int i = 0; i < a.length; i++) {
+    for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
     }
     return true;
   }
 
-  int _getInt32BigEndian(Uint8List bytes) {
-    int value = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
-    return value.toSigned(32);
+  int _int32BigEndian(Uint8List bytes) {
+    return ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3])
+        .toSigned(32);
   }
 
-  Uint8List _int32ToBytesBigEndian(int value) {
-    final bytes = Uint8List(4);
-    bytes[0] = (value >> 24) & 0xFF;
-    bytes[1] = (value >> 16) & 0xFF;
-    bytes[2] = (value >> 8) & 0xFF;
-    bytes[3] = value & 0xFF;
-    return bytes;
+  Uint8List _toInt32BigEndian(int value) => Uint8List(4)
+    ..[0] = (value >> 24) & 0xFF
+    ..[1] = (value >> 16) & 0xFF
+    ..[2] = (value >> 8) & 0xFF
+    ..[3] = value & 0xFF;
+
+  Uint8List _pkcs7Pad(Uint8List data, int blockSize) {
+    final padLen = blockSize - (data.length % blockSize);
+    return Uint8List(data.length + padLen)
+      ..setAll(0, data)
+      ..fillRange(data.length, data.length + padLen, padLen);
   }
 
-  Uint8List _pad(Uint8List data, int blockSize) {
-    final padLength = blockSize - (data.length % blockSize);
-    final padded = Uint8List(data.length + padLength);
-    padded.setAll(0, data);
-    padded.fillRange(data.length, padded.length, padLength);
-    return padded;
-  }
-
-  Uint8List _unpad(Uint8List data) {
-    if (data.isEmpty) return data;
-    final padLength = data.last;
-    if (padLength < 1 || padLength > 16) {
-      throw Exception('Invalid PKCS7 padding: $padLength');
+  Uint8List _pkcs7Unpad(Uint8List data) {
+    if (data.isEmpty) throw StateError('Cannot unpad empty data');
+    final padLen = data.last;
+    if (padLen < 1 || padLen > 16) {
+      throw StateError('Invalid PKCS#7 padding byte: $padLen');
     }
-    return data.sublist(0, data.length - padLength);
+    return data.sublist(0, data.length - padLen);
   }
 
-  Uint8List _aesCbcEncrypt(Uint8List keyBytes, Uint8List ivBytes, Uint8List paddedPlaintext) {
-    final cbc = CBCBlockCipher(AESEngine())
-      ..init(true, ParametersWithIV<KeyParameter>(KeyParameter(keyBytes), ivBytes));
-    final cipherText = Uint8List(paddedPlaintext.length);
+  Uint8List _aesCbcEncrypt(Uint8List key, Uint8List iv, Uint8List padded) {
+    final cipher = CBCBlockCipher(AESEngine())
+      ..init(true, ParametersWithIV(KeyParameter(key), iv));
+    final out = Uint8List(padded.length);
     var offset = 0;
-    while (offset < paddedPlaintext.length) {
-      offset += cbc.processBlock(paddedPlaintext, offset, cipherText, offset);
+    while (offset < padded.length) {
+      offset += cipher.processBlock(padded, offset, out, offset);
     }
-    return cipherText;
+    return out;
   }
 
-  Uint8List _aesCbcDecrypt(Uint8List keyBytes, Uint8List ivBytes, Uint8List cipherText) {
-    final cbc = CBCBlockCipher(AESEngine())
-      ..init(false, ParametersWithIV<KeyParameter>(KeyParameter(keyBytes), ivBytes));
-    final plainText = Uint8List(cipherText.length);
+  Uint8List _aesCbcDecrypt(Uint8List key, Uint8List iv, Uint8List ciphertext) {
+    final cipher = CBCBlockCipher(AESEngine())
+      ..init(false, ParametersWithIV(KeyParameter(key), iv));
+    final out = Uint8List(ciphertext.length);
     var offset = 0;
-    while (offset < cipherText.length) {
-      offset += cbc.processBlock(cipherText, offset, plainText, offset);
+    while (offset < ciphertext.length) {
+      offset += cipher.processBlock(ciphertext, offset, out, offset);
     }
-    return plainText;
+    return out;
   }
 
-  // --- Case-Preserved HTTP Client ---
+  // ── HTTP transport ──────────────────────────────────────────────────────────
 
-  Future<Uint8List> _postRaw(String path, Uint8List data, {Map<String, String>? queryParams}) async {
+  Future<Uint8List> _post(
+    String path,
+    Uint8List body, {
+    Map<String, String>? queryParams,
+  }) async {
     var url = 'http://$ip/app/$path';
     if (queryParams != null && queryParams.isNotEmpty) {
-      final queryStr = Uri(queryParameters: queryParams).query;
-      url += '?$queryStr';
+      url += '?${Uri(queryParameters: queryParams).query}';
     }
     final uri = Uri.parse(url);
 
-    try {
-      final request = await client.postUrl(uri).timeout(const Duration(seconds: 4));
+    final request = await client
+        .postUrl(uri)
+        .timeout(const Duration(seconds: 6));
 
-      // Force case preservation on all request headers (some Tapo firmware
-      // is strict about header casing).
-      request.headers.add('Host', uri.host, preserveHeaderCase: true);
-      request.headers.add('User-Agent', 'python-requests/2.28.1', preserveHeaderCase: true);
-      request.headers.add('Accept', '*/*', preserveHeaderCase: true);
-      request.headers.add('Accept-Encoding', 'gzip, deflate', preserveHeaderCase: true);
-      request.headers.add('Connection', 'keep-alive', preserveHeaderCase: true);
-      request.headers.add('Content-Length', data.length.toString(), preserveHeaderCase: true);
+    // TP-Link KLAP firmware is strict about header casing.
+    request.headers
+      ..add('Host', uri.host, preserveHeaderCase: true)
+      ..add('User-Agent', 'python-requests/2.28.1', preserveHeaderCase: true)
+      ..add('Accept', '*/*', preserveHeaderCase: true)
+      ..add('Accept-Encoding', 'gzip, deflate', preserveHeaderCase: true)
+      ..add('Connection', 'keep-alive', preserveHeaderCase: true)
+      ..add('Content-Length', body.length.toString(), preserveHeaderCase: true);
 
-      if (_cookie != null) {
-        request.headers.add('Cookie', _cookie!, preserveHeaderCase: true);
-      }
-
-      request.add(data);
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        debugPrint('[Tapo HTTP] $path returned HTTP ${response.statusCode}.');
-        // Drain the body (with its own timeout) so the connection is left
-        // in a clean, reusable state instead of being abandoned mid-read.
-        await response.drain<List<int>>().timeout(const Duration(seconds: 6));
-        throw Exception('HTTP Error: ${response.statusCode} - ${response.reasonPhrase}');
-      }
-
-      // The connection-setup timeout above doesn't cover the body read: a
-      // plug that accepts the connection but never finishes sending data
-      // would otherwise hang this call indefinitely.
-      final responseBytes =
-          await _collectResponseBytes(response).timeout(const Duration(seconds: 6));
-
-      // Read Set-Cookie case-insensitively. Deliberately not logged: it's a
-      // live session credential, and dumping it to device logs would let
-      // anyone with log access hijack this session.
-      final setCookieHeader = response.headers.value('set-cookie');
-      if (setCookieHeader != null) {
-        final index = setCookieHeader.indexOf(';');
-        _cookie = index != -1 ? setCookieHeader.substring(0, index) : setCookieHeader;
-      }
-
-      return responseBytes;
-    } catch (e) {
-      debugPrint('[Tapo HTTP] Request to $path failed: $e');
-      rethrow;
+    if (_cookie != null) {
+      request.headers.add('Cookie', _cookie!, preserveHeaderCase: true);
     }
+
+    request.add(body);
+    final response = await request.close();
+
+    if (response.statusCode != 200) {
+      // Drain body to leave connection in a clean state.
+      await response.drain<List<int>>().timeout(const Duration(seconds: 4));
+      throw HttpException(
+        'HTTP ${response.statusCode} ${response.reasonPhrase}',
+        uri: uri,
+      );
+    }
+
+    final responseBytes = await _readResponse(response)
+        .timeout(const Duration(seconds: 8));
+
+    // Extract session cookie (never logged — it's a live credential).
+    final setCookie = response.headers.value('set-cookie');
+    if (setCookie != null) {
+      final idx = setCookie.indexOf(';');
+      _cookie = idx != -1 ? setCookie.substring(0, idx) : setCookie;
+    }
+
+    return responseBytes;
   }
 
-  Future<Uint8List> _collectResponseBytes(HttpClientResponse response) async {
+  Future<Uint8List> _readResponse(HttpClientResponse response) async {
     final builder = BytesBuilder();
     await for (final chunk in response) {
       builder.add(chunk);
@@ -273,181 +290,158 @@ class _TapoSession {
     return builder.takeBytes();
   }
 
-  // --- Handshake Sequence ---
+  // ── KLAP handshake ──────────────────────────────────────────────────────────
 
-  Future<void> initialize() async {
-    debugPrint('[Tapo] Starting handshake.');
-    final localSeed = _getRandomBytes(16);
-    final response = await _postRaw('handshake1', localSeed);
+  Future<void> _initialize() async {
+    final localSeed = _randomBytes(16);
+    final hs1Response = await _post('handshake1', localSeed);
 
-    if (response.length < 48) {
-      throw Exception('Handshake1 response payload too short (${response.length} bytes, expected >= 48).');
+    if (hs1Response.length < 48) {
+      throw StateError(
+          'Handshake1 response too short (${hs1Response.length} bytes, expected ≥ 48)');
     }
 
-    final remoteSeed = response.sublist(0, 16);
-    final serverHash = response.sublist(16, 48);
+    final remoteSeed = hs1Response.sublist(0, 16);
+    final serverHash = hs1Response.sublist(16, 48);
 
-    Uint8List? authHash;
-    final credentialsToTry = [
+    // Try credentials in order: provided, blank, and a known factory default.
+    final candidates = [
       [email, password],
       ['', ''],
-      ['kasa@tp-link.net', 'kasaSetup']
+      ['kasa@tp-link.net', 'kasaSetup'],
     ];
 
-    for (int i = 0; i < credentialsToTry.length; i++) {
-      final creds = credentialsToTry[i];
-      final ah = _calcAuthHash(creds[0], creds[1]);
+    Uint8List? authHash;
+    for (var i = 0; i < candidates.length; i++) {
+      final ah = _calcAuthHash(candidates[i][0], candidates[i][1]);
+      final combined = Uint8List(
+          localSeed.length + remoteSeed.length + ah.length)
+        ..setAll(0, localSeed)
+        ..setAll(localSeed.length, remoteSeed)
+        ..setAll(localSeed.length + remoteSeed.length, ah);
 
-      final combined = Uint8List(localSeed.length + remoteSeed.length + ah.length);
-      combined.setAll(0, localSeed);
-      combined.setAll(localSeed.length, remoteSeed);
-      combined.setAll(localSeed.length + remoteSeed.length, ah);
-
-      final localSeedAuthHash = _sha256(combined);
-
-      if (_listEquals(localSeedAuthHash, serverHash)) {
+      if (_bytesEqual(_sha256(combined), serverHash)) {
         authHash = ah;
-        // Index only: never log the account e-mail/password, even on a
-        // successful match.
-        debugPrint('[Tapo] Handshake credentials matched (set #$i).');
+        // Log index only — never log credentials, even on success.
+        Log.i('TapoService', 'Handshake credential set #$i matched');
         break;
       }
     }
 
     if (authHash == null) {
-      throw Exception('Failed to authenticate against the Tapo plug.');
+      throw StateError('Authentication failed — no credential set matched server hash');
     }
 
-    final combinedHandshake2 = Uint8List(remoteSeed.length + localSeed.length + authHash.length);
-    combinedHandshake2.setAll(0, remoteSeed);
-    combinedHandshake2.setAll(remoteSeed.length, localSeed);
-    combinedHandshake2.setAll(remoteSeed.length + localSeed.length, authHash);
+    // Handshake 2: prove we hold the matching credentials.
+    final hs2Payload = _sha256(
+      Uint8List(remoteSeed.length + localSeed.length + authHash.length)
+        ..setAll(0, remoteSeed)
+        ..setAll(remoteSeed.length, localSeed)
+        ..setAll(remoteSeed.length + localSeed.length, authHash),
+    );
+    await _post('handshake2', hs2Payload);
 
-    final handshake2Payload = _sha256(combinedHandshake2);
-    await _postRaw('handshake2', handshake2Payload);
-    debugPrint('[Tapo] Handshake complete.');
+    // Derive session material from the shared seeds.
+    _key = _deriveKey('lsk', localSeed, remoteSeed, authHash).sublist(0, 16);
 
-    // key = sha256(b"lsk" + local_seed + remote_seed + auth_hash)[:16]
-    final lsk = utf8.encode('lsk');
-    final combinedKey = Uint8List(lsk.length + localSeed.length + remoteSeed.length + authHash.length);
-    combinedKey.setAll(0, lsk);
-    combinedKey.setAll(lsk.length, localSeed);
-    combinedKey.setAll(lsk.length + localSeed.length, remoteSeed);
-    combinedKey.setAll(lsk.length + localSeed.length + remoteSeed.length, authHash);
-    key = _sha256(combinedKey).sublist(0, 16);
+    final ivSeq = _deriveKey('iv', localSeed, remoteSeed, authHash);
+    _iv = ivSeq.sublist(0, 12);
+    _seq = _int32BigEndian(ivSeq.sublist(ivSeq.length - 4));
 
-    // ivseq = sha256(b"iv" + local_seed + remote_seed + auth_hash)
-    final ivPrefix = utf8.encode('iv');
-    final combinedIv = Uint8List(ivPrefix.length + localSeed.length + remoteSeed.length + authHash.length);
-    combinedIv.setAll(0, ivPrefix);
-    combinedIv.setAll(ivPrefix.length, localSeed);
-    combinedIv.setAll(ivPrefix.length + localSeed.length, remoteSeed);
-    combinedIv.setAll(ivPrefix.length + localSeed.length + remoteSeed.length, authHash);
-    final ivseq = _sha256(combinedIv);
-    iv = ivseq.sublist(0, 12);
+    _sigPrefix =
+        _deriveKey('ldk', localSeed, remoteSeed, authHash).sublist(0, 28);
 
-    final last4 = ivseq.sublist(ivseq.length - 4);
-    seq = _getInt32BigEndian(last4);
-
-    // sigPrefix = sha256(b"ldk" + local_seed + remote_seed + auth_hash)[:28]
-    final ldk = utf8.encode('ldk');
-    final combinedSig = Uint8List(ldk.length + localSeed.length + remoteSeed.length + authHash.length);
-    combinedSig.setAll(0, ldk);
-    combinedSig.setAll(ldk.length, localSeed);
-    combinedSig.setAll(ldk.length + localSeed.length, remoteSeed);
-    combinedSig.setAll(ldk.length + localSeed.length + remoteSeed.length, authHash);
-    sigPrefix = _sha256(combinedSig).sublist(0, 28);
-
-    // Note: key / iv / sigPrefix are intentionally never logged anywhere in
-    // this file. They're this session's live encryption material — dumping
-    // them to device logs would let anyone with log access decrypt this
-    // session's traffic.
+    Log.i('TapoService', 'KLAP handshake complete');
+    // key / iv / sigPrefix intentionally not logged — live encryption material.
   }
 
-  Uint8List _encryptPayload(Uint8List data) {
-    seq += 1;
-    final seqBytes = _int32ToBytesBigEndian(seq);
-    final paddedData = _pad(data, 16);
-
-    final aesIv = Uint8List(iv!.length + seqBytes.length);
-    aesIv.setAll(0, iv!);
-    aesIv.setAll(iv!.length, seqBytes);
-
-    final ciphertext = _aesCbcEncrypt(key!, aesIv, paddedData);
-
-    final combinedSig = Uint8List(sigPrefix!.length + seqBytes.length + ciphertext.length);
-    combinedSig.setAll(0, sigPrefix!);
-    combinedSig.setAll(sigPrefix!.length, seqBytes);
-    combinedSig.setAll(sigPrefix!.length + seqBytes.length, ciphertext);
-
-    final sig = _sha256(combinedSig);
-
-    final result = Uint8List(sig.length + ciphertext.length);
-    result.setAll(0, sig);
-    result.setAll(sig.length, ciphertext);
-    return result;
+  Uint8List _deriveKey(
+      String prefix, Uint8List local, Uint8List remote, Uint8List auth) {
+    final p = utf8.encode(prefix);
+    return _sha256(
+      Uint8List(p.length + local.length + remote.length + auth.length)
+        ..setAll(0, p)
+        ..setAll(p.length, local)
+        ..setAll(p.length + local.length, remote)
+        ..setAll(p.length + local.length + remote.length, auth),
+    );
   }
 
-  Uint8List _decryptPayload(Uint8List responseBytes) {
-    final seqBytes = _int32ToBytesBigEndian(seq);
+  // ── Request encryption ──────────────────────────────────────────────────────
 
-    final aesIv = Uint8List(iv!.length + seqBytes.length);
-    aesIv.setAll(0, iv!);
-    aesIv.setAll(iv!.length, seqBytes);
+  Uint8List _encrypt(Uint8List plaintext) {
+    _seq++;
+    final seqBytes = _toInt32BigEndian(_seq);
+    final aesIv = Uint8List(_iv!.length + seqBytes.length)
+      ..setAll(0, _iv!)
+      ..setAll(_iv!.length, seqBytes);
 
-    final ciphertext = responseBytes.sublist(32);
-    final decryptedPadded = _aesCbcDecrypt(key!, aesIv, ciphertext);
-    return _unpad(decryptedPadded);
+    final ciphertext = _aesCbcEncrypt(_key!, aesIv, _pkcs7Pad(plaintext, 16));
+
+    final sigInput = Uint8List(
+        _sigPrefix!.length + seqBytes.length + ciphertext.length)
+      ..setAll(0, _sigPrefix!)
+      ..setAll(_sigPrefix!.length, seqBytes)
+      ..setAll(_sigPrefix!.length + seqBytes.length, ciphertext);
+
+    final sig = _sha256(sigInput);
+
+    return Uint8List(sig.length + ciphertext.length)
+      ..setAll(0, sig)
+      ..setAll(sig.length, ciphertext);
   }
 
-  Future<dynamic> request(String method, [Map<String, dynamic>? params]) async {
-    if (key == null) {
-      await initialize();
-    }
+  Uint8List _decrypt(Uint8List responseBytes) {
+    final seqBytes = _toInt32BigEndian(_seq);
+    final aesIv = Uint8List(_iv!.length + seqBytes.length)
+      ..setAll(0, _iv!)
+      ..setAll(_iv!.length, seqBytes);
 
-    final Map<String, dynamic> payload = {
-      'method': method,
-    };
-    if (params != null) {
-      payload['params'] = params;
-    }
+    return _pkcs7Unpad(
+      _aesCbcDecrypt(_key!, aesIv, responseBytes.sublist(32)),
+    );
+  }
+
+  // ── High-level request ──────────────────────────────────────────────────────
+
+  Future<dynamic> _request(String method, [Map<String, dynamic>? params]) async {
+    if (!_isInitialized) await _initialize();
+
+    final payload = <String, dynamic>{'method': method};
+    if (params != null) payload['params'] = params;
 
     try {
-      final jsonStr = json.encode(payload);
-      final encrypted = _encryptPayload(Uint8List.fromList(utf8.encode(jsonStr)));
+      final encrypted = _encrypt(
+        Uint8List.fromList(utf8.encode(jsonEncode(payload))),
+      );
+      final responseBytes = await _post(
+        'request',
+        encrypted,
+        queryParams: {'seq': _seq.toString()},
+      );
 
-      final responseBytes = await _postRaw('request', encrypted, queryParams: {
-        'seq': seq.toString(),
-      });
+      final decrypted = jsonDecode(utf8.decode(_decrypt(responseBytes)))
+          as Map<String, dynamic>;
 
-      final decryptedBytes = _decryptPayload(responseBytes);
-      final decryptedStr = utf8.decode(decryptedBytes);
-      // Deliberately not logging jsonStr/decryptedStr: command/response
-      // payloads shouldn't be dumped to device logs on every automation
-      // cycle. Only the method name and any error code are logged below.
-      final data = json.decode(decryptedStr);
-
-      if (data['error_code'] != 0) {
-        debugPrint('[Tapo] "$method" returned error_code ${data['error_code']}.');
-        reset(); // Wipe session to force re-handshake on next attempt
-        throw Exception('Device returned error code: ${data['error_code']}');
+      final errorCode = decrypted['error_code'] as int? ?? -1;
+      if (errorCode != 0) {
+        reset(); // Force re-handshake next attempt.
+        throw StateError('Device returned error_code $errorCode for "$method"');
       }
 
-      return data['result'];
+      return decrypted['result'];
     } catch (e) {
-      reset(); // Ensure handshake is retried next time
+      reset();
       rethrow;
     }
   }
 
   Future<Map<String, dynamic>> getDeviceInfo() async {
-    final result = await request('get_device_info');
+    final result = await _request('get_device_info');
     return result as Map<String, dynamic>;
   }
 
   Future<void> setDeviceStatus(bool on) async {
-    await request('set_device_info', {
-      'device_on': on,
-    });
+    await _request('set_device_info', {'device_on': on});
   }
 }
