@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:flutter/foundation.dart';
 import 'package:pointycastle/export.dart';
 
 class TapoService {
@@ -39,13 +40,13 @@ class TapoService {
     required String email,
     required String password,
   }) async {
-    print('[TapoService] Starting native case-preserved connection test to: $ip');
+    debugPrint('[TapoService] Starting connection test to $ip');
     try {
       final session = _getSession(ip, email, password);
       session.reset(); // Force a fresh handshake for the test
-      
+
       final info = await session.getDeviceInfo();
-      
+
       String nickname = 'Unknown';
       if (info['nickname'] != null) {
         try {
@@ -56,13 +57,13 @@ class TapoService {
       }
       final model = info['model'] ?? 'Unknown';
       final isOn = info['device_on'] ?? false;
-      
+
       final successMsg = 'Connected successfully to Tapo $model ($nickname). State: ${isOn ? 'ON' : 'OFF'}.';
-      print('[TapoService] Test completed: $successMsg');
+      debugPrint('[TapoService] Test completed successfully.');
       return successMsg;
     } catch (e, stack) {
-      print('[TapoService] Test failed: $e');
-      print(stack);
+      debugPrint('[TapoService] Test failed: $e');
+      debugPrint('$stack');
       return 'Failed to connect: $e';
     }
   }
@@ -74,15 +75,15 @@ class TapoService {
     required String password,
     required bool on,
   }) async {
-    print('[TapoService] Setting state to: ${on ? 'ON' : 'OFF'}');
+    debugPrint('[TapoService] Setting state to: ${on ? 'ON' : 'OFF'}');
     try {
       final session = _getSession(ip, email, password);
       await session.setDeviceStatus(on);
-      print('[TapoService] State set successful.');
+      debugPrint('[TapoService] State set successful.');
       return true;
     } catch (e, stack) {
-      print('[TapoService] setOn failed: $e');
-      print(stack);
+      debugPrint('[TapoService] setOn failed: $e');
+      debugPrint('$stack');
       return false;
     }
   }
@@ -108,7 +109,6 @@ class _TapoSession {
   });
 
   void reset() {
-    print('[TapoSession] Clearing state and keys.');
     key = null;
     iv = null;
     seq = 0;
@@ -216,13 +216,11 @@ class _TapoSession {
     }
     final uri = Uri.parse(url);
 
-    print('[Tapo HTTP Request] -------------------------------------');
-    print('[Tapo HTTP Request] URL: $uri');
-
     try {
       final request = await client.postUrl(uri).timeout(const Duration(seconds: 4));
 
-      // Force case preservation on all request headers
+      // Force case preservation on all request headers (some Tapo firmware
+      // is strict about header casing).
       request.headers.add('Host', uri.host, preserveHeaderCase: true);
       request.headers.add('User-Agent', 'python-requests/2.28.1', preserveHeaderCase: true);
       request.headers.add('Accept', '*/*', preserveHeaderCase: true);
@@ -234,65 +232,60 @@ class _TapoSession {
         request.headers.add('Cookie', _cookie!, preserveHeaderCase: true);
       }
 
-      print('[Tapo HTTP Request] Transmitting Case-Preserved Headers:');
-      request.headers.forEach((name, values) {
-        print('  $name: $values');
-      });
-
-      // Write bytes directly to request body
       request.add(data);
       final response = await request.close();
 
-      print('[Tapo HTTP Response] ------------------------------------');
-      print('[Tapo HTTP Response] Status Code: ${response.statusCode} - ${response.reasonPhrase}');
-
-      // Accumulate binary stream
-      final builder = BytesBuilder();
-      await for (final chunk in response) {
-        builder.add(chunk);
-      }
-      final responseBytes = builder.takeBytes();
-
       if (response.statusCode != 200) {
-        String bodyStringPreview = '';
-        try {
-          bodyStringPreview = utf8.decode(responseBytes);
-        } catch (_) {}
-        print('[Tapo HTTP Response] Raw Error Body: $bodyStringPreview');
+        debugPrint('[Tapo HTTP] $path returned HTTP ${response.statusCode}.');
+        // Drain the body (with its own timeout) so the connection is left
+        // in a clean, reusable state instead of being abandoned mid-read.
+        await response.drain<List<int>>().timeout(const Duration(seconds: 6));
         throw Exception('HTTP Error: ${response.statusCode} - ${response.reasonPhrase}');
       }
 
-      // Read Set-Cookie case-insensitively
+      // The connection-setup timeout above doesn't cover the body read: a
+      // plug that accepts the connection but never finishes sending data
+      // would otherwise hang this call indefinitely.
+      final responseBytes =
+          await _collectResponseBytes(response).timeout(const Duration(seconds: 6));
+
+      // Read Set-Cookie case-insensitively. Deliberately not logged: it's a
+      // live session credential, and dumping it to device logs would let
+      // anyone with log access hijack this session.
       final setCookieHeader = response.headers.value('set-cookie');
       if (setCookieHeader != null) {
-        print('[Tapo HTTP Response] Found Set-Cookie header: $setCookieHeader');
         final index = setCookieHeader.indexOf(';');
         _cookie = index != -1 ? setCookieHeader.substring(0, index) : setCookieHeader;
-        print('[Tapo HTTP Response] Extracted Session Cookie: $_cookie');
       }
 
       return responseBytes;
     } catch (e) {
-      print('[Tapo HTTP Error] Request failed: $e');
+      debugPrint('[Tapo HTTP] Request to $path failed: $e');
       rethrow;
     }
+  }
+
+  Future<Uint8List> _collectResponseBytes(HttpClientResponse response) async {
+    final builder = BytesBuilder();
+    await for (final chunk in response) {
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
   }
 
   // --- Handshake Sequence ---
 
   Future<void> initialize() async {
-    print('[Tapo handshake1] Starting handshake sequence.');
+    debugPrint('[Tapo] Starting handshake.');
     final localSeed = _getRandomBytes(16);
     final response = await _postRaw('handshake1', localSeed);
-    
+
     if (response.length < 48) {
       throw Exception('Handshake1 response payload too short (${response.length} bytes, expected >= 48).');
     }
 
     final remoteSeed = response.sublist(0, 16);
     final serverHash = response.sublist(16, 48);
-    print('[Tapo handshake1] Extracted remoteSeed: ${remoteSeed.toList()}');
-    print('[Tapo handshake1] Extracted serverHash: ${serverHash.toList()}');
 
     Uint8List? authHash;
     final credentialsToTry = [
@@ -301,21 +294,22 @@ class _TapoSession {
       ['kasa@tp-link.net', 'kasaSetup']
     ];
 
-    print('[Tapo handshake1] Attempting credential validation loop.');
     for (int i = 0; i < credentialsToTry.length; i++) {
       final creds = credentialsToTry[i];
       final ah = _calcAuthHash(creds[0], creds[1]);
-      
+
       final combined = Uint8List(localSeed.length + remoteSeed.length + ah.length);
       combined.setAll(0, localSeed);
       combined.setAll(localSeed.length, remoteSeed);
       combined.setAll(localSeed.length + remoteSeed.length, ah);
-      
+
       final localSeedAuthHash = _sha256(combined);
-      
+
       if (_listEquals(localSeedAuthHash, serverHash)) {
         authHash = ah;
-        print('[Tapo handshake1] Successfully matched credentials at index $i: "${creds[0]}"');
+        // Index only: never log the account e-mail/password, even on a
+        // successful match.
+        debugPrint('[Tapo] Handshake credentials matched (set #$i).');
         break;
       }
     }
@@ -324,15 +318,14 @@ class _TapoSession {
       throw Exception('Failed to authenticate against the Tapo plug.');
     }
 
-    print('[Tapo handshake2] Generating handshake2 payload.');
     final combinedHandshake2 = Uint8List(remoteSeed.length + localSeed.length + authHash.length);
     combinedHandshake2.setAll(0, remoteSeed);
     combinedHandshake2.setAll(remoteSeed.length, localSeed);
     combinedHandshake2.setAll(remoteSeed.length + localSeed.length, authHash);
-    
+
     final handshake2Payload = _sha256(combinedHandshake2);
     await _postRaw('handshake2', handshake2Payload);
-    print('[Tapo handshake2] Handshake2 succeeded.');
+    debugPrint('[Tapo] Handshake complete.');
 
     // key = sha256(b"lsk" + local_seed + remote_seed + auth_hash)[:16]
     final lsk = utf8.encode('lsk');
@@ -342,7 +335,6 @@ class _TapoSession {
     combinedKey.setAll(lsk.length + localSeed.length, remoteSeed);
     combinedKey.setAll(lsk.length + localSeed.length + remoteSeed.length, authHash);
     key = _sha256(combinedKey).sublist(0, 16);
-    print('[Tapo Security] Derived encryption key: ${key!.toList()}');
 
     // ivseq = sha256(b"iv" + local_seed + remote_seed + auth_hash)
     final ivPrefix = utf8.encode('iv');
@@ -353,11 +345,9 @@ class _TapoSession {
     combinedIv.setAll(ivPrefix.length + localSeed.length + remoteSeed.length, authHash);
     final ivseq = _sha256(combinedIv);
     iv = ivseq.sublist(0, 12);
-    print('[Tapo Security] Derived IV prefix: ${iv!.toList()}');
 
     final last4 = ivseq.sublist(ivseq.length - 4);
     seq = _getInt32BigEndian(last4);
-    print('[Tapo Security] Initial sequence number: $seq');
 
     // sigPrefix = sha256(b"ldk" + local_seed + remote_seed + auth_hash)[:28]
     final ldk = utf8.encode('ldk');
@@ -367,27 +357,31 @@ class _TapoSession {
     combinedSig.setAll(ldk.length + localSeed.length, remoteSeed);
     combinedSig.setAll(ldk.length + localSeed.length + remoteSeed.length, authHash);
     sigPrefix = _sha256(combinedSig).sublist(0, 28);
-    print('[Tapo Security] Derived signature prefix: ${sigPrefix!.toList()}');
+
+    // Note: key / iv / sigPrefix are intentionally never logged anywhere in
+    // this file. They're this session's live encryption material — dumping
+    // them to device logs would let anyone with log access decrypt this
+    // session's traffic.
   }
 
   Uint8List _encryptPayload(Uint8List data) {
     seq += 1;
     final seqBytes = _int32ToBytesBigEndian(seq);
     final paddedData = _pad(data, 16);
-    
+
     final aesIv = Uint8List(iv!.length + seqBytes.length);
     aesIv.setAll(0, iv!);
     aesIv.setAll(iv!.length, seqBytes);
-    
+
     final ciphertext = _aesCbcEncrypt(key!, aesIv, paddedData);
-    
+
     final combinedSig = Uint8List(sigPrefix!.length + seqBytes.length + ciphertext.length);
     combinedSig.setAll(0, sigPrefix!);
     combinedSig.setAll(sigPrefix!.length, seqBytes);
     combinedSig.setAll(sigPrefix!.length + seqBytes.length, ciphertext);
-    
+
     final sig = _sha256(combinedSig);
-    
+
     final result = Uint8List(sig.length + ciphertext.length);
     result.setAll(0, sig);
     result.setAll(sig.length, ciphertext);
@@ -396,11 +390,11 @@ class _TapoSession {
 
   Uint8List _decryptPayload(Uint8List responseBytes) {
     final seqBytes = _int32ToBytesBigEndian(seq);
-    
+
     final aesIv = Uint8List(iv!.length + seqBytes.length);
     aesIv.setAll(0, iv!);
     aesIv.setAll(iv!.length, seqBytes);
-    
+
     final ciphertext = responseBytes.sublist(32);
     final decryptedPadded = _aesCbcDecrypt(key!, aesIv, ciphertext);
     return _unpad(decryptedPadded);
@@ -420,23 +414,25 @@ class _TapoSession {
 
     try {
       final jsonStr = json.encode(payload);
-      print('[Tapo Request] Plaintext payload: $jsonStr');
       final encrypted = _encryptPayload(Uint8List.fromList(utf8.encode(jsonStr)));
-      
+
       final responseBytes = await _postRaw('request', encrypted, queryParams: {
         'seq': seq.toString(),
       });
-      
+
       final decryptedBytes = _decryptPayload(responseBytes);
       final decryptedStr = utf8.decode(decryptedBytes);
-      print('[Tapo Request] Plaintext response received: $decryptedStr');
+      // Deliberately not logging jsonStr/decryptedStr: command/response
+      // payloads shouldn't be dumped to device logs on every automation
+      // cycle. Only the method name and any error code are logged below.
       final data = json.decode(decryptedStr);
-      
+
       if (data['error_code'] != 0) {
+        debugPrint('[Tapo] "$method" returned error_code ${data['error_code']}.');
         reset(); // Wipe session to force re-handshake on next attempt
         throw Exception('Device returned error code: ${data['error_code']}');
       }
-      
+
       return data['result'];
     } catch (e) {
       reset(); // Ensure handshake is retried next time
