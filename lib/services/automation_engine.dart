@@ -23,8 +23,19 @@ import 'tapo_service.dart';
 /// low-battery sequence a second time. It is only cleared (both in memory
 /// and on disk) once the battery actually reaches the high threshold.
 ///
-/// A lock ([_sequenceRunning]) prevents two sequences from overlapping if
-/// status packets arrive faster than a sequence completes.
+/// [_fullyChargedHandled] is a separate, in-memory-only dedup flag for the
+/// high-threshold "stop charging" sequence. It is intentionally NOT tied to
+/// [_chargingTriggered]: the charger should be turned off whenever the
+/// battery is at/above the high limit while in-window, regardless of
+/// whether this app instance was the one that started the charge (e.g. the
+/// plug was switched on manually, or the app was restarted mid-cycle). It
+/// just prevents the OFF command from being re-sent on every single BLE
+/// status packet while sitting at/above the threshold, and re-arms itself
+/// automatically once the level dips back below the threshold so the stop
+/// sequence can fire again on the next full-charge cycle.
+///
+/// A lock ([_sequenceRunning]) prevents two low-battery sequences from
+/// overlapping if status packets arrive faster than a sequence completes.
 class AutomationEngine {
   AutomationEngine(this._ble, this._webhooks, this._tapo, this._storage);
 
@@ -34,6 +45,7 @@ class AutomationEngine {
   final StorageService _storage;
 
   bool _chargingTriggered = false;
+  bool _fullyChargedHandled = false;
   bool _sequenceRunning = false;
   bool _initialized = false;
 
@@ -53,10 +65,18 @@ class AutomationEngine {
     final batteryLevel = _ble.status.batteryLevel;
     if (batteryLevel <= 0) return; // ignore bogus readings
 
+    // Re-arm the high-threshold stop sequence once the level drops back
+    // below the limit, so it can fire again next time it reaches it.
+    if (batteryLevel < settings.highThreshold) {
+      _fullyChargedHandled = false;
+    }
+
     // ── Low threshold: start charging ──────────────────────────────────────
     // Guard: only trigger if we haven't already done so since the last full
     // charge. This survives disconnects/reconnects because the flag is
-    // persisted to disk in _runLowBatterySequence.
+    // persisted to disk in _runLowBatterySequence — e.g. triggered at 5%,
+    // reconnected at 8% (still below the low threshold) must NOT re-fire
+    // the AC-cut + charger-on sequence on top of a charge already underway.
     if (batteryLevel <= settings.lowThreshold &&
         !_chargingTriggered &&
         !_sequenceRunning) {
@@ -64,7 +84,13 @@ class AutomationEngine {
     }
 
     // ── High threshold: stop charging ──────────────────────────────────────
-    if (batteryLevel >= settings.highThreshold && _chargingTriggered) {
+    // Deliberately NOT gated on _chargingTriggered: the charger must be
+    // turned off whenever the battery is at/above the limit while in-window,
+    // even if this app instance never saw it cross the low threshold (manual
+    // plug-in, app restart mid-cycle, etc). _fullyChargedHandled only stops
+    // it firing repeatedly on every status packet while at/above the limit.
+    if (batteryLevel >= settings.highThreshold && !_fullyChargedHandled) {
+      _fullyChargedHandled = true;
       await _runFullyChargedSequence(settings);
     }
   }
