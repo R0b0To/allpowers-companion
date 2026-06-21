@@ -15,6 +15,7 @@ final class AppStrings {
     // ── Navigation ──────────────────────────────────────────────────────────
     'tab_control': {'en': 'Control', 'it': 'Controllo'},
     'tab_automations': {'en': 'Automation', 'it': 'Automazione'},
+    'tab_history': {'en': 'History', 'it': 'Cronologia'},
 
     // ── Connection states ───────────────────────────────────────────────────
     'connecting': {
@@ -51,6 +52,7 @@ final class AppStrings {
       'it': "L'app necessita dei permessi Bluetooth e posizione per trovare la tua power station.",
     },
     'open_settings': {'en': 'Open Settings', 'it': 'Apri impostazioni'},
+    'cancel': {'en': 'Cancel', 'it': 'Annulla'},
 
     // ── Metrics ─────────────────────────────────────────────────────────────
     'charging': {'en': 'Charging In', 'it': 'Ingresso'},
@@ -163,5 +165,27 @@ final class AppStrings {
       'en': 'Webhook failed',
       'it': 'Webhook fallito',
     },
+
+    // ── History ─────────────────────────────────────────────────────────────
+    'history_description': {
+      'en': 'A log of every automation action and the battery level that triggered it.',
+      'it': 'Un registro di ogni azione automatica e del livello di batteria che l\'ha attivata.',
+    },
+    'no_history': {
+      'en': 'No automation actions yet. They\'ll show up here once the engine fires.',
+      'it': 'Nessuna azione automatica ancora. Apparirà qui non appena il motore si attiva.',
+    },
+    'clear_history': {'en': 'Clear History', 'it': 'Svuota cronologia'},
+    'clear_history_confirm': {
+      'en': 'This permanently deletes all recorded automation history. This cannot be undone.',
+      'it': 'Questo elimina permanentemente tutta la cronologia registrata. Non può essere annullato.',
+    },
+    'history_action_on': {'en': 'Charger turned ON', 'it': 'Caricatore acceso'},
+    'history_action_off': {'en': 'Charger turned OFF', 'it': 'Caricatore spento'},
+    'history_success': {'en': 'Success', 'it': 'Riuscito'},
+    'history_failed': {'en': 'Failed', 'it': 'Fallito'},
+    'history_method_local_tapo': {'en': 'Local Tapo', 'it': 'Tapo locale'},
+    'history_method_webhook': {'en': 'Webhook', 'it': 'Webhook'},
+    'history_method_none': {'en': 'Not configured', 'it': 'Non configurato'},
   };
 }

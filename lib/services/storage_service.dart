@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
 import '../utils/logger.dart';
 
@@ -27,6 +30,11 @@ final class StorageService {
   static const _keyTapoEmail = 'tapo_email';
   static const _keyTapoPassword = 'tapo_password';
   static const _keyChargingTriggered = 'charging_triggered';
+  static const _keyAutomationHistory = 'automation_history';
+
+  /// Hard cap on stored history entries — keeps SharedPreferences (which is
+  /// not meant for large blobs) bounded regardless of how long the app runs.
+  static const _maxHistoryEntries = 100;
 
   // ── Cached instance ───────────────────────────────────────────────────────
   SharedPreferences? _prefs;
@@ -131,6 +139,51 @@ final class StorageService {
       await prefs.setBool(_keyChargingTriggered, value);
     } catch (e) {
       Log.e('StorageService', 'setChargingTriggered failed', e);
+    }
+  }
+
+  // ── Automation history ────────────────────────────────────────────────────
+
+  /// Loads stored history entries, newest first. Individually malformed
+  /// entries are skipped rather than failing the whole load.
+  Future<List<AutomationHistoryEntry>> loadAutomationHistory() async {
+    try {
+      final prefs = await _getPrefs();
+      final raw = prefs.getStringList(_keyAutomationHistory) ?? [];
+      final entries = <AutomationHistoryEntry>[];
+      for (final s in raw) {
+        try {
+          final entry = AutomationHistoryEntry.tryFromJson(
+            jsonDecode(s) as Map<String, dynamic>,
+          );
+          if (entry != null) entries.add(entry);
+        } catch (_) {
+          // Skip this single entry; one bad row shouldn't drop the rest.
+        }
+      }
+      return entries;
+    } catch (e) {
+      Log.e('StorageService', 'loadAutomationHistory failed', e);
+      return [];
+    }
+  }
+
+  /// Persists [entries] (expected newest-first), capping at
+  /// [_maxHistoryEntries].
+  Future<void> saveAutomationHistory(
+    List<AutomationHistoryEntry> entries,
+  ) async {
+    try {
+      final prefs = await _getPrefs();
+      final capped = entries.length > _maxHistoryEntries
+          ? entries.sublist(0, _maxHistoryEntries)
+          : entries;
+      await prefs.setStringList(
+        _keyAutomationHistory,
+        capped.map((e) => jsonEncode(e.toJson())).toList(),
+      );
+    } catch (e) {
+      Log.e('StorageService', 'saveAutomationHistory failed', e);
     }
   }
 

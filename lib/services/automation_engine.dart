@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
 import '../utils/logger.dart';
 import 'ble_service.dart';
+import 'history_service.dart';
 import 'storage_service.dart';
 import 'tapo_service.dart';
 import 'webhook_service.dart';
@@ -32,18 +34,27 @@ import 'webhook_service.dart';
 /// - [_sequenceRunning] prevents overlapping low-battery sequences if BLE
 ///   packets arrive faster than the sequence completes (which includes
 ///   deliberate 5 s + 10 s delays).
+///
+/// ## History
+/// Every attempted ON/OFF action — whether it succeeds, fails, or has
+/// nothing configured to run — is logged to [HistoryService] with the
+/// battery level that triggered it, captured at the *start* of the sequence
+/// (before any of the multi-second delays below) so it reflects the reading
+/// the user actually saw cross the threshold.
 final class AutomationEngine {
   AutomationEngine(
     this._ble,
     this._webhooks,
     this._tapo,
     this._storage,
+    this._history,
   );
 
   final BleService _ble;
   final WebhookService _webhooks;
   final TapoService _tapo;
   final StorageService _storage;
+  final HistoryService _history;
 
   bool _chargingTriggered = false;
   bool _fullyChargedHandled = false;
@@ -97,6 +108,10 @@ final class AutomationEngine {
   Future<void> _runLowBatterySequence(AutomationSettings settings) async {
     _sequenceRunning = true;
 
+    // Captured up front — this is the reading that actually triggered the
+    // sequence, not whatever the level drifts to during the delays below.
+    final triggerLevel = _ble.status.batteryLevel;
+
     // Persist flag before any async work so a crash or disconnect mid-sequence
     // does not retrigger on reconnect.
     _chargingTriggered = true;
@@ -114,7 +129,14 @@ final class AutomationEngine {
       await Future<void>.delayed(const Duration(seconds: 5));
 
       // Step 3: Activate the charger.
-      await _activatePlug(settings, on: true);
+      final (success, method) = await _activatePlug(settings, on: true);
+      await _history.addEntry(AutomationHistoryEntry(
+        timestamp: DateTime.now(),
+        action: HistoryAction.turnOn,
+        batteryLevel: triggerLevel,
+        success: success,
+        method: method,
+      ));
 
       // Step 4: Give the charger time to complete its power-delivery handshake.
       await Future<void>.delayed(const Duration(seconds: 10));
@@ -136,6 +158,8 @@ final class AutomationEngine {
   Future<void> _runFullyChargedSequence(AutomationSettings settings) async {
     Log.i('AutomationEngine', 'High threshold reached — stopping charge');
 
+    final triggerLevel = _ble.status.batteryLevel;
+
     // Reset persisted flag first so even if deactivation fails the engine
     // won't be stuck in "charging" state forever.
     _chargingTriggered = false;
@@ -146,12 +170,22 @@ final class AutomationEngine {
       await _ble.setAc(true);
     }
 
-    await _activatePlug(settings, on: false);
+    final (success, method) = await _activatePlug(settings, on: false);
+    await _history.addEntry(AutomationHistoryEntry(
+      timestamp: DateTime.now(),
+      action: HistoryAction.turnOff,
+      batteryLevel: triggerLevel,
+      success: success,
+      method: method,
+    ));
   }
 
   // ── Shared plug control with fallback ─────────────────────────────────────
 
-  Future<void> _activatePlug(AutomationSettings settings, {required bool on}) async {
+  Future<(bool success, ActivationMethod method)> _activatePlug(
+    AutomationSettings settings, {
+    required bool on,
+  }) async {
     final action = on ? 'ON' : 'OFF';
 
     if (settings.hasLocalTapoCredentials) {
@@ -164,7 +198,7 @@ final class AutomationEngine {
       );
       if (success) {
         Log.i('AutomationEngine', 'Local Tapo $action succeeded');
-        return;
+        return (true, ActivationMethod.localTapo);
       }
       Log.w('AutomationEngine', 'Local Tapo $action failed — falling back to webhook');
     }
@@ -178,8 +212,10 @@ final class AutomationEngine {
       } else {
         Log.w('AutomationEngine', '$action webhook failed');
       }
-    } else {
-      Log.w('AutomationEngine', 'No $action action configured');
+      return (success, ActivationMethod.webhook);
     }
+
+    Log.w('AutomationEngine', 'No $action action configured');
+    return (false, ActivationMethod.none);
   }
 }

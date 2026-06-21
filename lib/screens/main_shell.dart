@@ -5,6 +5,7 @@ import '../l10n/app_strings.dart';
 import '../models/automation_settings.dart';
 import '../services/automation_engine.dart';
 import '../services/ble_service.dart';
+import '../services/history_service.dart';
 import '../services/notification_service.dart';
 import '../services/storage_service.dart';
 import '../services/tapo_service.dart';
@@ -12,6 +13,7 @@ import '../services/webhook_service.dart';
 import '../theme/app_theme.dart';
 import 'automations_tab.dart';
 import 'control_tab.dart';
+import 'history_tab.dart';
 
 /// Root shell: owns all service singletons and hosts the bottom navigation.
 ///
@@ -32,6 +34,7 @@ class _MainShellState extends State<MainShell> {
   final _webhooks = WebhookService();
   final _tapo = TapoService();
 
+  late final HistoryService _history = HistoryService(_storage);
   late final BleService _ble;
   late final AutomationEngine _automation;
 
@@ -45,7 +48,7 @@ class _MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
     _ble = BleService(_storage);
-    _automation = AutomationEngine(_ble, _webhooks, _tapo, _storage);
+    _automation = AutomationEngine(_ble, _webhooks, _tapo, _storage, _history);
 
     _ble.onStatus = (status) {
       _notifications.handleBatteryLevel(status.batteryLevel);
@@ -67,6 +70,7 @@ class _MainShellState extends State<MainShell> {
       _bootstrapped = true;
     });
 
+    await _history.init();
     await _automation.init();
     await _ble.init();
   }
@@ -93,6 +97,7 @@ class _MainShellState extends State<MainShell> {
   @override
   void dispose() {
     _ble.dispose();
+    _history.dispose();
     super.dispose();
   }
 
@@ -126,6 +131,10 @@ class _MainShellState extends State<MainShell> {
             tapo: _tapo,
             onSettingsChanged: _onSettingsChanged,
           ),
+          HistoryTab(
+            history: _history,
+            strings: strings,
+          ),
         ],
       ),
       bottomNavigationBar: Container(
@@ -145,6 +154,11 @@ class _MainShellState extends State<MainShell> {
               icon: const Icon(Icons.auto_mode_outlined),
               selectedIcon: const Icon(Icons.auto_mode_rounded),
               label: strings.t('tab_automations'),
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.history_outlined),
+              selectedIcon: const Icon(Icons.history_rounded),
+              label: strings.t('tab_history'),
             ),
           ],
         ),

@@ -274,9 +274,7 @@ class _AutomationsTabState extends State<AutomationsTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(s.t('tab_automations'), style: AppTypography.displaySm),
                 const SizedBox(height: AppSpacing.xs),
-                Text(s.t('automation_description'), style: AppTypography.bodyMd),
                 const SizedBox(height: AppSpacing.xxl),
 
                 // ── Smart Charging card ──────────────────────────────────────
