@@ -1,4 +1,4 @@
-package com.example.ap_companion
+package com.aeidolon.ap_companion
 
 import io.flutter.embedding.android.FlutterActivity
 
