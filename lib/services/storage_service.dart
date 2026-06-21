@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
+import '../models/energy_log_entry.dart';
 import '../utils/logger.dart';
 
 /// Typed, error-safe wrapper around [SharedPreferences].
@@ -15,6 +16,10 @@ import '../utils/logger.dart';
 /// - The Tapo password is stored in plain text inside SharedPreferences
 ///   (the same sandbox storage as the rest of the settings). For production
 ///   this should be replaced with flutter_secure_storage.
+/// - The energy log uses a compact line format (not JSON) since it can grow
+///   to thousands of entries — see [EnergyLogEntry.toCompact]. If retention
+///   needs to grow well beyond [_maxEnergyLogEntries], consider moving it to
+///   sqflite instead of SharedPreferences.
 final class StorageService {
   // ── Keys ──────────────────────────────────────────────────────────────────
   static const _keyDeviceId = 'saved_device_id';
@@ -31,10 +36,15 @@ final class StorageService {
   static const _keyTapoPassword = 'tapo_password';
   static const _keyChargingTriggered = 'charging_triggered';
   static const _keyAutomationHistory = 'automation_history';
+  static const _keyEnergyLog = 'energy_log';
 
   /// Hard cap on stored history entries — keeps SharedPreferences (which is
   /// not meant for large blobs) bounded regardless of how long the app runs.
   static const _maxHistoryEntries = 100;
+
+  /// Hard cap on stored energy samples. At the default 5-minute sampling
+  /// interval (288 samples/day) this holds roughly 30 days of history.
+  static const _maxEnergyLogEntries = 8640;
 
   // ── Cached instance ───────────────────────────────────────────────────────
   SharedPreferences? _prefs;
@@ -184,6 +194,43 @@ final class StorageService {
       );
     } catch (e) {
       Log.e('StorageService', 'saveAutomationHistory failed', e);
+    }
+  }
+
+  // ── Energy log ─────────────────────────────────────────────────────────────
+
+  /// Loads stored energy samples, oldest first. Individually malformed lines
+  /// are skipped rather than failing the whole load.
+  Future<List<EnergyLogEntry>> loadEnergyLog() async {
+    try {
+      final prefs = await _getPrefs();
+      final raw = prefs.getStringList(_keyEnergyLog) ?? [];
+      final entries = <EnergyLogEntry>[];
+      for (final line in raw) {
+        final entry = EnergyLogEntry.tryFromCompact(line);
+        if (entry != null) entries.add(entry);
+      }
+      return entries;
+    } catch (e) {
+      Log.e('StorageService', 'loadEnergyLog failed', e);
+      return [];
+    }
+  }
+
+  /// Persists [entries] (expected oldest-first), capping at
+  /// [_maxEnergyLogEntries] by dropping the oldest samples first.
+  Future<void> saveEnergyLog(List<EnergyLogEntry> entries) async {
+    try {
+      final prefs = await _getPrefs();
+      final capped = entries.length > _maxEnergyLogEntries
+          ? entries.sublist(entries.length - _maxEnergyLogEntries)
+          : entries;
+      await prefs.setStringList(
+        _keyEnergyLog,
+        capped.map((e) => e.toCompact()).toList(),
+      );
+    } catch (e) {
+      Log.e('StorageService', 'saveEnergyLog failed', e);
     }
   }
 

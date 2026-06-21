@@ -58,6 +58,32 @@ final class AppStrings {
     'charging': {'en': 'Charging In', 'it': 'Ingresso'},
     'discharging': {'en': 'Discharging Out', 'it': 'Uscita'},
 
+    // ── Energy tab ──────────────────────────────────────────────────────────
+    'tab_energy': {'en': 'Energy', 'it': 'Energia'},
+    'energy_description': {
+      'en': 'Battery and power trends recorded from your station over time.',
+      'it': 'Andamento di batteria e potenza registrato nel tempo dalla tua stazione.',
+    },
+    'no_energy_data': {
+      'en': 'No data yet. Samples are recorded automatically while connected.',
+      'it': 'Nessun dato ancora. I campioni vengono registrati automaticamente da connesso.',
+    },
+    'range_day': {'en': '24h', 'it': '24h'},
+    'range_week': {'en': '7d', 'it': '7g'},
+    'range_month': {'en': '30d', 'it': '30g'},
+    'range_all': {'en': 'All', 'it': 'Tutto'},
+    'battery_trend': {'en': 'Battery Level', 'it': 'Livello batteria'},
+    'power_flow': {'en': 'Power Flow', 'it': 'Flusso di potenza'},
+    'avg_input': {'en': 'Avg In', 'it': 'Media ingresso'},
+    'avg_output': {'en': 'Avg Out', 'it': 'Media uscita'},
+    'peak_input': {'en': 'Peak In', 'it': 'Picco ingresso'},
+    'peak_output': {'en': 'Peak Out', 'it': 'Picco uscita'},
+    'clear_energy_log': {'en': 'Clear Data', 'it': 'Cancella dati'},
+    'clear_energy_log_confirm': {
+      'en': 'This permanently deletes all recorded energy samples. This cannot be undone.',
+      'it': 'Questo elimina permanentemente tutti i campioni energetici registrati. Non può essere annullato.',
+    },
+
     // ── Outlet controls ─────────────────────────────────────────────────────
     'controls': {'en': 'Outlet Controls', 'it': 'Controllo Prese'},
     'usb': {'en': 'USB', 'it': 'USB'},

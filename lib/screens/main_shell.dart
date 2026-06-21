@@ -5,6 +5,7 @@ import '../l10n/app_strings.dart';
 import '../models/automation_settings.dart';
 import '../services/automation_engine.dart';
 import '../services/ble_service.dart';
+import '../services/energy_log_service.dart';
 import '../services/history_service.dart';
 import '../services/notification_service.dart';
 import '../services/storage_service.dart';
@@ -13,6 +14,7 @@ import '../services/webhook_service.dart';
 import '../theme/app_theme.dart';
 import 'automations_tab.dart';
 import 'control_tab.dart';
+import 'energy_tab.dart';
 import 'history_tab.dart';
 
 /// Root shell: owns all service singletons and hosts the bottom navigation.
@@ -35,6 +37,7 @@ class _MainShellState extends State<MainShell> {
   final _tapo = TapoService();
 
   late final HistoryService _history = HistoryService(_storage);
+  late final EnergyLogService _energyLog = EnergyLogService(_storage);
   late final BleService _ble;
   late final AutomationEngine _automation;
 
@@ -53,6 +56,7 @@ class _MainShellState extends State<MainShell> {
     _ble.onStatus = (status) {
       _notifications.handleBatteryLevel(status.batteryLevel);
       _automation.evaluate(_settings);
+      _energyLog.recordSample(status);
     };
 
     // Defer bootstrap until the first frame so the widget tree is ready.
@@ -71,6 +75,7 @@ class _MainShellState extends State<MainShell> {
     });
 
     await _history.init();
+    await _energyLog.init();
     await _automation.init();
     await _ble.init();
   }
@@ -98,6 +103,7 @@ class _MainShellState extends State<MainShell> {
   void dispose() {
     _ble.dispose();
     _history.dispose();
+    _energyLog.dispose();
     super.dispose();
   }
 
@@ -131,6 +137,10 @@ class _MainShellState extends State<MainShell> {
             tapo: _tapo,
             onSettingsChanged: _onSettingsChanged,
           ),
+          EnergyTab(
+            energyLog: _energyLog,
+            strings: strings,
+          ),
           HistoryTab(
             history: _history,
             strings: strings,
@@ -154,6 +164,11 @@ class _MainShellState extends State<MainShell> {
               icon: const Icon(Icons.auto_mode_outlined),
               selectedIcon: const Icon(Icons.auto_mode_rounded),
               label: strings.t('tab_automations'),
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.show_chart_outlined),
+              selectedIcon: const Icon(Icons.show_chart_rounded),
+              label: strings.t('tab_energy'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.history_outlined),
