@@ -496,6 +496,7 @@ class _BatteryRing extends StatelessWidget {
   Widget build(BuildContext context) {
     final level = status.batteryLevel;
     final color = AppColors.batteryColor(level);
+    final remainingTime = status.formattedRemainingTime;
 
     return Semantics(
       label: 'Battery level: $level percent',
@@ -532,11 +533,11 @@ class _BatteryRing extends StatelessWidget {
                     '$level%',
                     style: AppTypography.monoLg.copyWith(color: color),
                   ),
-                  if (status.isCharging)
+                  if (status.isCharging) ...[
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
+                        const Icon(
                           Icons.bolt_rounded,
                           size: 12,
                           color: AppColors.success,
@@ -549,6 +550,17 @@ class _BatteryRing extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ],
+                  // Remaining time indicator
+                  if (remainingTime != null) ...[
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      status.isCharging ? '$remainingTime to full' : '$remainingTime left',
+                      style: AppTypography.labelSm.copyWith(
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ],
@@ -558,7 +570,6 @@ class _BatteryRing extends StatelessWidget {
     );
   }
 }
-
 class _MetricsRow extends StatelessWidget {
   const _MetricsRow({required this.status, required this.strings});
   final PowerStationStatus status;

@@ -40,6 +40,7 @@ abstract final class BleConstants {
   static const int batteryLevelOffset = 8;
   static const int inputWattsHighByteOffset = 9;   // High byte; low byte at offset 10.
   static const int outputWattsHighByteOffset = 11; // High byte; low byte at offset 12.
+  static const int minutesRemainingHighByteOffset = 13; // High byte; low byte at offset 14.
 
   // ── Socket bitmask values ──────────────────────────────────────────────────
   static const int usbMask = 0x01;

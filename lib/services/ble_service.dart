@@ -348,12 +348,18 @@ class BleService extends ChangeNotifier {
     final outputWatts =
         (bytes[BleConstants.outputWattsHighByteOffset] << 8) |
         bytes[BleConstants.outputWattsHighByteOffset + 1];
+        
+    // Extract the minutes remaining (16-bit big-endian integer)
+    final minutesRemaining =
+        (bytes[BleConstants.minutesRemainingHighByteOffset] << 8) |
+        bytes[BleConstants.minutesRemainingHighByteOffset + 1];
 
     final newStatus = _inManualOverrideWindow
         ? status.copyWith(
             batteryLevel: batteryLevel,
             inputWatts: inputWatts,
             outputWatts: outputWatts,
+            minutesRemaining: minutesRemaining, // Include in manual override window
             // Socket fields preserved — relay may not have caught up yet.
           )
         : (() {
@@ -362,6 +368,7 @@ class BleService extends ChangeNotifier {
               batteryLevel: batteryLevel,
               inputWatts: inputWatts,
               outputWatts: outputWatts,
+              minutesRemaining: minutesRemaining, // Include in normal status update
               isUsbOn: (socketMask & BleConstants.usbMask) != 0,
               isAcOn: (socketMask & BleConstants.acMask) != 0,
               isDcOn: (socketMask & BleConstants.dcMask) != 0,
