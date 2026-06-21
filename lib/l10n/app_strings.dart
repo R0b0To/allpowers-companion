@@ -1,68 +1,37 @@
-/// Minimal hand-rolled localization for English/Italian.
+/// Minimal hand-rolled localisation for English / Italian.
 ///
-/// This intentionally avoids the full `flutter gen-l10n` / ARB pipeline
-/// since the app only has a couple dozen strings. If the string list grows
-/// much further, migrating to `flutter_localizations` + ARB files is
-/// worth it for translator tooling and pluralization support.
-class AppStrings {
+/// The app only has ~50 strings so the full `flutter gen-l10n` / ARB pipeline
+/// would be overkill. If the string list grows significantly, migrating to
+/// `flutter_localizations` + ARB files is worthwhile for translator tooling
+/// and proper pluralisation support.
+final class AppStrings {
   AppStrings(this.isItalian);
 
   final bool isItalian;
 
+  String t(String key) => _translations[key]?[isItalian ? 'it' : 'en'] ?? key;
+
   static const Map<String, Map<String, String>> _translations = {
+    // ── Navigation ──────────────────────────────────────────────────────────
     'tab_control': {'en': 'Control', 'it': 'Controllo'},
     'tab_automations': {'en': 'Automation', 'it': 'Automazione'},
-    'automation_description': {
-      'en': 'Automatically manage AC outlets and a smart plug based on '
-          'battery level.',
-      'it': 'Gestisce automaticamente le prese AC e una presa smart in base '
-          'al livello della batteria.',
-    },
+
+    // ── Connection states ───────────────────────────────────────────────────
     'connecting': {
-      'en': 'Connecting to saved Allpowers station...',
-      'it': 'Connessione alla stazione Allpowers salvata...',
+      'en': 'Connecting to saved station…',
+      'it': 'Connessione alla stazione salvata…',
     },
+    'connected': {'en': 'Connected', 'it': 'Connesso'},
     'forget': {'en': 'Forget Device', 'it': 'Scollega dispositivo'},
-    'cancel_forget': {'en': 'Cancel & Forget Device', 'it': 'Annulla e scollega'},
-    'charging': {'en': 'Charging In', 'it': 'Ingresso'},
-    'discharging': {'en': 'Discharging Out', 'it': 'Uscita'},
-    'usb': {'en': 'USB Ports', 'it': 'Porte USB'},
-    'ac': {'en': 'AC Outlets', 'it': 'Prese AC'},
-    'dc': {'en': '12V DC Sockets', 'it': 'Prese DC 12V'},
-    'on': {'en': 'ON', 'it': 'ON'},
-    'off': {'en': 'OFF', 'it': 'OFF'},
-    'active': {'en': 'Active', 'it': 'Attivo'},
-    'disabled': {'en': 'Disabled', 'it': 'Disattivato'},
-    'controls': {'en': 'Outlet Controls', 'it': 'Controllo Prese'},
-    'automation': {'en': 'Automation', 'it': 'Automazione'},
-    'on_webhook': {'en': 'ON Webhook', 'it': 'Webhook ACCENSIONE'},
-    'off_webhook': {'en': 'OFF Webhook', 'it': 'Webhook SPEGNIMENTO'},
-    'low_limit': {'en': 'Min Limit %', 'it': 'Limite min %'},
-    'high_limit': {'en': 'Max Limit %', 'it': 'Limite max %'},
-    'scan': {'en': 'Scan for Battery', 'it': 'Scansiona batteria'},
-    'scanning': {'en': 'Scanning...', 'it': 'Scansione...'},
-    'connected': {'en': 'Connected:', 'it': 'Connesso:'},
-    'start_time': {'en': 'Start Time', 'it': 'Ora inizio'},
-    'end_time': {'en': 'End Time', 'it': 'Ora fine'},
-    'webhook_url_missing': {
-      'en': 'Set a webhook URL first',
-      'it': 'Imposta prima un URL webhook',
-    },
-    'permissions_required_title': {
-      'en': 'Bluetooth & location permissions needed',
-      'it': 'Permessi Bluetooth e posizione necessari',
-    },
-    'permissions_required_body': {
-      'en': 'This app needs Bluetooth and location permissions to find your '
-          'power station. Please enable them in system settings.',
-      'it': "L'app necessita dei permessi Bluetooth e posizione per trovare "
-          'la tua power station. Abilitali nelle impostazioni di sistema.',
-    },
-    'open_settings': {'en': 'Open Settings', 'it': 'Apri impostazioni'},
+    'cancel_forget': {'en': 'Cancel & Forget', 'it': 'Annulla e scollega'},
+    'scan': {'en': 'Scan for Station', 'it': 'Cerca stazione'},
+    'scanning': {'en': 'Scanning…', 'it': 'Ricerca…'},
     'no_devices_found': {
-      'en': 'No devices found yet. Make sure your station is powered on and nearby.',
+      'en': 'No devices found. Make sure your station is powered on and nearby.',
       'it': 'Nessun dispositivo trovato. Assicurati che la stazione sia accesa e vicina.',
     },
+
+    // ── Bluetooth ───────────────────────────────────────────────────────────
     'bluetooth_off_title': {
       'en': 'Bluetooth is disabled',
       'it': 'Bluetooth disattivato',
@@ -72,10 +41,54 @@ class AppStrings {
       'it': 'Attiva il Bluetooth per connetterti alla tua stazione Allpowers.',
     },
 
-    // ── Automations tab: plug control & local Tapo card ──────────────────
+    // ── Permissions ─────────────────────────────────────────────────────────
+    'permissions_required_title': {
+      'en': 'Bluetooth & location permissions needed',
+      'it': 'Permessi Bluetooth e posizione necessari',
+    },
+    'permissions_required_body': {
+      'en': 'This app needs Bluetooth and location permissions to find your power station.',
+      'it': "L'app necessita dei permessi Bluetooth e posizione per trovare la tua power station.",
+    },
+    'open_settings': {'en': 'Open Settings', 'it': 'Apri impostazioni'},
+
+    // ── Metrics ─────────────────────────────────────────────────────────────
+    'charging': {'en': 'Charging In', 'it': 'Ingresso'},
+    'discharging': {'en': 'Discharging Out', 'it': 'Uscita'},
+
+    // ── Outlet controls ─────────────────────────────────────────────────────
+    'controls': {'en': 'Outlet Controls', 'it': 'Controllo Prese'},
+    'usb': {'en': 'USB', 'it': 'USB'},
+    'ac': {'en': 'AC', 'it': 'AC'},
+    'dc': {'en': '12V DC', 'it': 'DC 12V'},
+    'on': {'en': 'ON', 'it': 'ON'},
+    'off': {'en': 'OFF', 'it': 'OFF'},
+    'active': {'en': 'Active', 'it': 'Attivo'},
+    'disabled': {'en': 'Off', 'it': 'Spento'},
+
+    // ── Automation ──────────────────────────────────────────────────────────
+    'automation': {'en': 'Smart Charging', 'it': 'Ricarica automatica'},
+    'automation_description': {
+      'en': 'Automatically manages AC outlets and a smart plug based on battery level.',
+      'it': 'Gestisce automaticamente le prese AC e una presa smart in base al livello della batteria.',
+    },
+    'start_time': {'en': 'Window Start', 'it': 'Inizio finestra'},
+    'end_time': {'en': 'Window End', 'it': 'Fine finestra'},
+    'low_limit': {'en': 'Charge Below %', 'it': 'Carica sotto %'},
+    'high_limit': {'en': 'Stop At %', 'it': 'Ferma a %'},
+    'threshold_error': {
+      'en': 'Must be 0–100',
+      'it': 'Deve essere 0–100',
+    },
+    'low_high_error': {
+      'en': 'Low must be less than high',
+      'it': 'Il minimo deve essere minore del massimo',
+    },
+
+    // ── Plug control ────────────────────────────────────────────────────────
     'plug_control_actions': {'en': 'Plug Control Actions', 'it': 'Azioni di controllo presa'},
-    'on_webhook_url': {'en': 'ON Webhook URL', 'it': 'URL Webhook ACCENSIONE'},
-    'off_webhook_url': {'en': 'OFF Webhook URL', 'it': 'URL Webhook SPEGNIMENTO'},
+    'on_webhook_url': {'en': 'Charger ON Webhook URL', 'it': 'URL Webhook ACCENSIONE'},
+    'off_webhook_url': {'en': 'Charger OFF Webhook URL', 'it': 'URL Webhook SPEGNIMENTO'},
     'on_webhook_url_fallback': {
       'en': 'Fallback ON Webhook (Optional)',
       'it': 'Webhook ACCENSIONE di riserva (opzionale)',
@@ -84,12 +97,16 @@ class AppStrings {
       'en': 'Fallback OFF Webhook (Optional)',
       'it': 'Webhook SPEGNIMENTO di riserva (opzionale)',
     },
-    'local_tapo_title': {'en': 'Local Tapo Plug Control', 'it': 'Controllo presa Tapo locale'},
+    'webhook_url_missing': {
+      'en': 'Set a webhook URL or configure local Tapo first',
+      'it': 'Imposta prima un URL webhook o configura il Tapo locale',
+    },
+
+    // ── Local Tapo ──────────────────────────────────────────────────────────
+    'local_tapo_title': {'en': 'Local Tapo Control', 'it': 'Controllo Tapo locale'},
     'local_tapo_description': {
-      'en': 'Attempts to connect directly to the plug on your local network. '
-          'Falls back to webhooks if direct connection is offline or fails.',
-      'it': 'Tenta la connessione diretta alla presa sulla tua rete locale. '
-          'In caso di errore o presa non raggiungibile, usa i webhook come riserva.',
+      'en': 'Connects directly to the plug on your local network. Falls back to webhooks if unavailable.',
+      'it': 'Si connette direttamente alla presa sulla rete locale. Usa i webhook come riserva se non disponibile.',
     },
     'tapo_ip_label': {
       'en': 'Plug IP address (e.g. 192.168.1.75)',
@@ -97,36 +114,54 @@ class AppStrings {
     },
     'tapo_email_label': {'en': 'TP-Link account e-mail', 'it': 'E-mail account TP-Link'},
     'tapo_password_label': {'en': 'TP-Link account password', 'it': 'Password account TP-Link'},
-    'test_local_handshake': {'en': 'Test Local Handshake', 'it': 'Testa connessione locale'},
+    'test_local_handshake': {'en': 'Test Connection', 'it': 'Testa connessione'},
     'tapo_fields_incomplete': {
-      'en': 'Fill in Tapo IP, E-mail, and Password first.',
-      'it': 'Inserisci prima IP, E-mail e Password del Tapo.',
+      'en': 'Fill in IP, e-mail, and password first.',
+      'it': 'Inserisci prima IP, e-mail e password.',
+    },
+
+    // ── Action feedback ─────────────────────────────────────────────────────
+    'tapo_credentials_incomplete': {
+      'en': 'Local Tapo credentials incomplete.',
+      'it': 'Credenziali Tapo locale incomplete.',
     },
     'tapo_attempting_connection': {
-      'en': 'Attempting local connection...',
-      'it': 'Tentativo di connessione locale...',
+      'en': 'Connecting to plug…',
+      'it': 'Connessione alla presa…',
     },
-    'tapo_credentials_incomplete': {
-      'en': 'Local Tapo: credentials incomplete.',
-      'it': 'Tapo locale: credenziali incomplete.',
+    'tapo_attempting_local_on': {
+      'en': 'Turning ON via local Tapo…',
+      'it': 'Accensione via Tapo locale…',
     },
-    'tapo_attempting_local_on': {'en': 'Attempting local Tapo ON...', 'it': 'Tentativo Tapo locale ON...'},
-    'tapo_attempting_local_off': {'en': 'Attempting local Tapo OFF...', 'it': 'Tentativo Tapo locale OFF...'},
-    'tapo_local_on_successful': {'en': 'Local Tapo ON successful.', 'it': 'Tapo locale ON riuscito.'},
-    'tapo_local_off_successful': {'en': 'Local Tapo OFF successful.', 'it': 'Tapo locale OFF riuscito.'},
+    'tapo_attempting_local_off': {
+      'en': 'Turning OFF via local Tapo…',
+      'it': 'Spegnimento via Tapo locale…',
+    },
+    'tapo_local_on_successful': {
+      'en': 'Plug turned ON via local Tapo.',
+      'it': 'Presa accesa via Tapo locale.',
+    },
+    'tapo_local_off_successful': {
+      'en': 'Plug turned OFF via local Tapo.',
+      'it': 'Presa spenta via Tapo locale.',
+    },
     'tapo_local_on_failed': {
-      'en': 'Local Tapo ON failed. Falling back to webhook.',
-      'it': 'Tapo locale ON fallito. Uso il webhook di riserva.',
+      'en': 'Local Tapo ON failed — trying webhook fallback…',
+      'it': 'Tapo locale ON fallito — tentativo webhook di riserva…',
     },
     'tapo_local_off_failed': {
-      'en': 'Local Tapo OFF failed. Falling back to webhook.',
-      'it': 'Tapo locale OFF fallito. Uso il webhook di riserva.',
+      'en': 'Local Tapo OFF failed — trying webhook fallback…',
+      'it': 'Tapo locale OFF fallito — tentativo webhook di riserva…',
     },
-    'executing_webhook': {'en': 'Executing webhook...', 'it': 'Esecuzione webhook...'},
+    'executing_webhook': {'en': 'Firing webhook…', 'it': 'Esecuzione webhook…'},
     'webhook_failed': {'en': 'Webhook failed.', 'it': 'Webhook fallito.'},
-    'webhook_successful_prefix': {'en': 'Webhook successful (Code:', 'it': 'Webhook riuscito (Codice:'},
-    'webhook_failed_with_code_prefix': {'en': 'Webhook failed (Code:', 'it': 'Webhook fallito (Codice:'},
+    'webhook_successful_prefix': {
+      'en': 'Webhook OK',
+      'it': 'Webhook riuscito',
+    },
+    'webhook_failed_with_code_prefix': {
+      'en': 'Webhook failed',
+      'it': 'Webhook fallito',
+    },
   };
-
-  String t(String key) => _translations[key]?[isItalian ? 'it' : 'en'] ?? key;
 }

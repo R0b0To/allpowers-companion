@@ -3,12 +3,14 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../l10n/app_strings.dart';
+import '../models/power_station_status.dart';
 import '../services/ble_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/metric_card.dart';
 import '../widgets/toggle_card.dart';
 
-/// Shows BT state / scan / connected device UI.
+/// Displays connection state, live station metrics, and outlet controls.
+///
 /// Receives [BleService] from [MainShell] — creates nothing itself.
 class ControlTab extends StatelessWidget {
   const ControlTab({
@@ -24,264 +26,623 @@ class ControlTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-        child: AnimatedBuilder(
-          animation: ble,
-          builder: (context, _) => _buildBody(context),
-        ),
-      ),
+    return AnimatedBuilder(
+      animation: ble,
+      builder: (context, _) {
+        return SafeArea(
+          child: _buildBody(context),
+        );
+      },
     );
   }
 
   Widget _buildBody(BuildContext context) {
     if (ble.blueAdapterState == BluetoothAdapterState.off ||
         ble.blueAdapterState == BluetoothAdapterState.unavailable) {
-      return _buildBluetoothOffView();
+      return _BluetoothOffView(strings: strings);
     }
-    if (ble.isAutoConnecting) return _buildConnectingView();
-    if (!ble.isConnected) return _buildScanView(context);
-    return _buildConnectedView();
+    if (ble.isAutoConnecting) {
+      return _ConnectingView(ble: ble, strings: strings);
+    }
+    if (!ble.isConnected) {
+      return _ScanView(
+        ble: ble,
+        strings: strings,
+        permissionsPermanentlyDenied: permissionsPermanentlyDenied,
+      );
+    }
+    return _ConnectedView(ble: ble, strings: strings);
   }
+}
 
-  // ── Bluetooth disabled ────────────────────────────────────────────────────
+// ── Bluetooth disabled ──────────────────────────────────────────────────────
 
-  Widget _buildBluetoothOffView() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 120),
-        const Icon(Icons.bluetooth_disabled, size: 64, color: Colors.grey),
-        const SizedBox(height: 24),
-        Text(
-          strings.t('bluetooth_off_title'),
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 12),
-        Text(
-          strings.t('bluetooth_off_body'),
-          style: const TextStyle(color: Colors.grey, fontSize: 13),
-          textAlign: TextAlign.center,
-        ),
-      ],
-    );
-  }
+class _BluetoothOffView extends StatelessWidget {
+  const _BluetoothOffView({required this.strings});
+  final AppStrings strings;
 
-  // ── Connecting ────────────────────────────────────────────────────────────
-
-  Widget _buildConnectingView() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 120),
-        const CircularProgressIndicator(),
-        const SizedBox(height: 30),
-        Text(
-          strings.t('connecting'),
-          style: const TextStyle(fontWeight: FontWeight.bold),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 40),
-        Center(
-          child: IconButton(
-            onPressed: ble.forgetDevice,
-            icon: const Icon(Icons.close, color: Colors.red, size: 32),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ── Scan ──────────────────────────────────────────────────────────────────
-
-  Widget _buildScanView(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        if (permissionsPermanentlyDenied) _buildPermissionsBanner(),
-        Row(
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xxxl),
+        child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ElevatedButton.icon(
-              onPressed: ble.isScanning ? null : ble.startScan,
-              icon: const Icon(Icons.bluetooth_searching),
-              label: Text(ble.isScanning
-                  ? strings.t('scanning')
-                  : strings.t('scan')),
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceElevated,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.bluetooth_disabled_rounded,
+                size: 40,
+                color: AppColors.textTertiary,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xxl),
+            Text(
+              strings.t('bluetooth_off_title'),
+              style: AppTypography.headingLg,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              strings.t('bluetooth_off_body'),
+              style: AppTypography.bodyMd,
+              textAlign: TextAlign.center,
             ),
           ],
         ),
-        const SizedBox(height: 20),
-        if (!ble.isScanning && ble.scanResults.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Text(
-              strings.t('no_devices_found'),
+      ),
+    );
+  }
+}
+
+// ── Auto-connecting ─────────────────────────────────────────────────────────
+
+class _ConnectingView extends StatelessWidget {
+  const _ConnectingView({required this.ble, required this.strings});
+  final BleService ble;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xxxl),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 56,
+              height: 56,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                color: AppColors.teal,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xxl),
+            Text(
+              strings.t('connecting'),
+              style: AppTypography.headingMd,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: AppSpacing.xxxl),
+            OutlinedButton.icon(
+              onPressed: ble.forgetDevice,
+              icon: const Icon(Icons.close_rounded, size: 18),
+              label: Text(strings.t('cancel_forget')),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.error,
+                side: const BorderSide(color: AppColors.error),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Scan view ───────────────────────────────────────────────────────────────
+
+class _ScanView extends StatelessWidget {
+  const _ScanView({
+    required this.ble,
+    required this.strings,
+    required this.permissionsPermanentlyDenied,
+  });
+
+  final BleService ble;
+  final AppStrings strings;
+  final bool permissionsPermanentlyDenied;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.xxl,
+              AppSpacing.lg,
+              0,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('AP Companion', style: AppTypography.displaySm),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  'Find your Allpowers station',
+                  style: AppTypography.bodyMd,
+                ),
+                const SizedBox(height: AppSpacing.xxl),
+                if (permissionsPermanentlyDenied)
+                  _PermissionsBanner(strings: strings),
+                if (permissionsPermanentlyDenied)
+                  const SizedBox(height: AppSpacing.lg),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: ble.isScanning ? null : ble.startScan,
+                    icon: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: ble.isScanning
+                          ? const SizedBox(
+                              key: ValueKey('spinner'),
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.background,
+                              ),
+                            )
+                          : const Icon(
+                              key: ValueKey('icon'),
+                              Icons.bluetooth_searching_rounded,
+                              size: 18,
+                            ),
+                    ),
+                    label: Text(
+                      ble.isScanning
+                          ? strings.t('scanning')
+                          : strings.t('scan'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xxl),
+              ],
             ),
           ),
-        ListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: ble.scanResults.length,
-          itemBuilder: (context, index) {
-            final device = ble.scanResults[index].device;
-            final name =
-                device.platformName.isNotEmpty ? device.platformName : 'AP';
-            return Card(
-              child: ListTile(
-                leading: const Icon(Icons.bluetooth, color: Colors.grey),
-                title: Text(name),
-                trailing: IconButton(
-                  icon: const Icon(Icons.link, color: Colors.teal),
-                  onPressed: () => ble.connectToDevice(device),
+        ),
+        if (!ble.isScanning && ble.scanResults.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.xxxl),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.radar_rounded,
+                      size: 48,
+                      color: AppColors.textTertiary,
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    Text(
+                      strings.t('no_devices_found'),
+                      style: AppTypography.bodyMd,
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ),
               ),
-            );
-          },
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            sliver: SliverList.separated(
+              itemCount: ble.scanResults.length,
+              separatorBuilder: (_, __) =>
+                  const SizedBox(height: AppSpacing.sm),
+              itemBuilder: (context, index) {
+                final result = ble.scanResults[index];
+                final device = result.device;
+                final name = device.platformName.isNotEmpty
+                    ? device.platformName
+                    : 'AP Station';
+                final rssi = result.rssi;
+                return _DeviceTile(
+                  name: name,
+                  rssi: rssi,
+                  onConnect: () => ble.connectToDevice(device),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DeviceTile extends StatelessWidget {
+  const _DeviceTile({
+    required this.name,
+    required this.rssi,
+    required this.onConnect,
+  });
+
+  final String name;
+  final int rssi;
+  final VoidCallback onConnect;
+
+  IconData get _signalIcon {
+    if (rssi >= -60) return Icons.signal_wifi_4_bar_rounded;
+    if (rssi >= -75) return Icons.network_wifi_3_bar_rounded;
+    if (rssi >= -85) return Icons.network_wifi_2_bar_rounded;
+    return Icons.network_wifi_1_bar_rounded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: AppRadius.mdBR,
+        border: Border.all(color: AppColors.border),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.xs,
+        ),
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: AppColors.tealSurface,
+            borderRadius: AppRadius.smBR,
+          ),
+          child: const Icon(
+            Icons.battery_charging_full_rounded,
+            color: AppColors.teal,
+            size: 20,
+          ),
+        ),
+        title: Text(name, style: AppTypography.headingSm),
+        subtitle: Row(
+          children: [
+            Icon(_signalIcon, size: 12, color: AppColors.textTertiary),
+            const SizedBox(width: 4),
+            Text('$rssi dBm', style: AppTypography.labelSm),
+          ],
+        ),
+        trailing: FilledButton(
+          onPressed: onConnect,
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.tealSurface,
+            foregroundColor: AppColors.teal,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Text('Connect', style: AppTypography.labelMd.copyWith(color: AppColors.teal)),
+        ),
+      ),
+    );
+  }
+}
+
+class _PermissionsBanner extends StatelessWidget {
+  const _PermissionsBanner({required this.strings});
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.warningSurface,
+        borderRadius: AppRadius.mdBR,
+        border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded,
+                  size: 16, color: AppColors.warning),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  strings.t('permissions_required_title'),
+                  style: AppTypography.headingSm
+                      .copyWith(color: AppColors.warning),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            strings.t('permissions_required_body'),
+            style: AppTypography.bodySm
+                .copyWith(color: AppColors.warning.withOpacity(0.8)),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          OutlinedButton(
+            onPressed: openAppSettings,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.warning,
+              side: BorderSide(color: AppColors.warning.withOpacity(0.5)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Text(
+              strings.t('open_settings'),
+              style: AppTypography.labelMd.copyWith(color: AppColors.warning),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Connected view ──────────────────────────────────────────────────────────
+
+class _ConnectedView extends StatelessWidget {
+  const _ConnectedView({required this.ble, required this.strings});
+  final BleService ble;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = ble.status;
+    final deviceName =
+        ble.connectedDevice?.platformName.isNotEmpty == true
+            ? ble.connectedDevice!.platformName
+            : 'AP Station';
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.xl,
+              AppSpacing.lg,
+              0,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ConnectionHeader(
+                  deviceName: deviceName,
+                  onForget: ble.forgetDevice,
+                ),
+                const SizedBox(height: AppSpacing.xxl),
+                _BatteryRing(status: status),
+                const SizedBox(height: AppSpacing.xxl),
+                _MetricsRow(status: status, strings: strings),
+                const SizedBox(height: AppSpacing.xl),
+                _OutletSection(ble: ble, status: status, strings: strings),
+                const SizedBox(height: AppSpacing.xxl),
+              ],
+            ),
+          ),
         ),
       ],
     );
   }
+}
 
-  Widget _buildPermissionsBanner() {
-    return Card(
-      color: Colors.amber.withOpacity(0.1),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.amber.withOpacity(0.4)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(strings.t('permissions_required_title'),
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(strings.t('permissions_required_body'),
-                style: const TextStyle(fontSize: 13, color: Colors.grey)),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: openAppSettings,
-              child: Text(strings.t('open_settings')),
-            ),
-          ],
+class _ConnectionHeader extends StatelessWidget {
+  const _ConnectionHeader({
+    required this.deviceName,
+    required this.onForget,
+  });
+
+  final String deviceName;
+  final VoidCallback onForget;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: const BoxDecoration(
+            color: AppColors.success,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Text(
+            deviceName,
+            style: AppTypography.headingSm,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        IconButton(
+          onPressed: onForget,
+          tooltip: 'Forget device',
+          style: IconButton.styleFrom(
+            backgroundColor: AppColors.errorSurface,
+            foregroundColor: AppColors.error,
+          ),
+          icon: const Icon(Icons.link_off_rounded, size: 18),
+        ),
+      ],
+    );
+  }
+}
+
+class _BatteryRing extends StatelessWidget {
+  const _BatteryRing({required this.status});
+  final PowerStationStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final level = status.batteryLevel;
+    final color = AppColors.batteryColor(level);
+
+    return Semantics(
+      label: 'Battery level: $level percent',
+      child: Center(
+        child: SizedBox(
+          width: 160,
+          height: 160,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Track ring
+              SizedBox.expand(
+                child: CircularProgressIndicator(
+                  value: 1,
+                  strokeWidth: 12,
+                  color: AppColors.surfaceElevated,
+                ),
+              ),
+              // Value ring
+              SizedBox.expand(
+                child: CircularProgressIndicator(
+                  value: level / 100,
+                  strokeWidth: 12,
+                  strokeCap: StrokeCap.round,
+                  backgroundColor: Colors.transparent,
+                  valueColor: AlwaysStoppedAnimation<Color>(color),
+                ),
+              ),
+              // Centre content
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '$level%',
+                    style: AppTypography.monoLg.copyWith(color: color),
+                  ),
+                  if (status.isCharging)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.bolt_rounded,
+                          size: 12,
+                          color: AppColors.success,
+                        ),
+                        Text(
+                          'Charging',
+                          style: AppTypography.labelSm.copyWith(
+                            color: AppColors.success,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
+}
 
-  // ── Connected ─────────────────────────────────────────────────────────────
+class _MetricsRow extends StatelessWidget {
+  const _MetricsRow({required this.status, required this.strings});
+  final PowerStationStatus status;
+  final AppStrings strings;
 
-  Widget _buildConnectedView() {
-    final status = ble.status;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
+  @override
+  Widget build(BuildContext context) {
+    return Row(
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.bluetooth_connected,
-                    color: Colors.green, size: 22),
-                const SizedBox(width: 8),
-                Text(
-                  '${strings.t('connected')} '
-                  '${ble.connectedDevice?.platformName ?? 'AP'}',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 13),
-                ),
-              ],
-            ),
-            IconButton(
-              onPressed: ble.forgetDevice,
-              icon: const Icon(Icons.link_off, color: Colors.red, size: 24),
-            ),
-          ],
+        Expanded(
+          child: MetricCard(
+            icon: Icons.arrow_downward_rounded,
+            iconColor: AppColors.success,
+            title: strings.t('charging'),
+            value: '${status.inputWatts} W',
+          ),
         ),
-        const Divider(height: 20, color: AppColors.borderSubtle),
-        const SizedBox(height: 10),
-        Stack(
-          alignment: Alignment.center,
-          children: [
-            SizedBox(
-              width: 130,
-              height: 130,
-              child: CircularProgressIndicator(
-                value: status.batteryLevel / 100,
-                strokeWidth: 10,
-                backgroundColor: const Color(0xFF222222),
-                valueColor: AlwaysStoppedAnimation<Color>(
-                    status.batteryLevel <= 20 ? Colors.red : Colors.teal),
-              ),
-            ),
-            Text(
-              '${status.batteryLevel}%',
-              style: const TextStyle(
-                  fontSize: 32, fontWeight: FontWeight.bold),
-            ),
-          ],
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: MetricCard(
+            icon: Icons.arrow_upward_rounded,
+            iconColor: AppColors.error,
+            title: strings.t('discharging'),
+            value: '${status.outputWatts} W',
+          ),
         ),
-        const SizedBox(height: 30),
-        Row(
-          children: [
-            Expanded(
-              child: MetricCard(
-                icon: Icons.arrow_downward,
-                iconColor: Colors.green,
-                title: strings.t('charging'),
-                value: '${status.inputWatts} W',
+      ],
+    );
+  }
+}
+
+class _OutletSection extends StatelessWidget {
+  const _OutletSection({
+    required this.ble,
+    required this.status,
+    required this.strings,
+  });
+
+  final BleService ble;
+  final PowerStationStatus status;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(strings.t('controls'), style: AppTypography.labelLg),
+        const SizedBox(height: AppSpacing.md),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ToggleCard(
+                icon: Icons.usb_rounded,
+                title: strings.t('usb'),
+                activeLabel: strings.t('active'),
+                disabledLabel: strings.t('disabled'),
+                isActive: status.isUsbOn,
+                activeColor: AppColors.usb,
+                onTap: () => ble.setUsb(!status.isUsbOn),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: MetricCard(
-                icon: Icons.arrow_upward,
-                iconColor: Colors.redAccent,
-                title: strings.t('discharging'),
-                value: '${status.outputWatts} W',
+              const SizedBox(width: AppSpacing.sm),
+              ToggleCard(
+                icon: Icons.power_rounded,
+                title: strings.t('ac'),
+                activeLabel: strings.t('active'),
+                disabledLabel: strings.t('disabled'),
+                isActive: status.isAcOn,
+                activeColor: AppColors.ac,
+                onTap: () => ble.setAc(!status.isAcOn),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 30),
-        Row(
-          children: [
-            ToggleCard(
-              icon: Icons.usb,
-              title: strings.t('usb'),
-              activeLabel: strings.t('active'),
-              disabledLabel: strings.t('disabled'),
-              isActive: status.isUsbOn,
-              activeColor: Colors.blue,
-              onTap: () => ble.setUsb(!status.isUsbOn),
-            ),
-            const SizedBox(width: 10),
-            ToggleCard(
-              icon: Icons.power,
-              title: strings.t('ac'),
-              activeLabel: strings.t('active'),
-              disabledLabel: strings.t('disabled'),
-              isActive: status.isAcOn,
-              activeColor: Colors.orange,
-              onTap: () => ble.setAc(!status.isAcOn),
-            ),
-            const SizedBox(width: 10),
-            ToggleCard(
-              icon: Icons.circle_outlined,
-              title: strings.t('dc'),
-              activeLabel: strings.t('active'),
-              disabledLabel: strings.t('disabled'),
-              isActive: status.isDcOn,
-              activeColor: Colors.green,
-              onTap: () => ble.setDc(!status.isDcOn),
-            ),
-          ],
+              const SizedBox(width: AppSpacing.sm),
+              ToggleCard(
+                icon: Icons.cable_rounded,
+                title: strings.t('dc'),
+                activeLabel: strings.t('active'),
+                disabledLabel: strings.t('disabled'),
+                isActive: status.isDcOn,
+                activeColor: AppColors.dc,
+                onTap: () => ble.setDc(!status.isDcOn),
+              ),
+            ],
+          ),
         ),
       ],
     );

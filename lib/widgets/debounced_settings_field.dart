@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// A settings text field that debounces its `onChangedDebounced` callback
-/// so we don't hit SharedPreferences on every single keystroke.
+/// A settings text field that debounces [onChangedDebounced] so SharedPreferences
+/// is not hit on every keystroke.
+///
+/// Optionally displays an inline validation message via [validator].
 class DebouncedSettingsField extends StatefulWidget {
   const DebouncedSettingsField({
     super.key,
@@ -15,7 +17,11 @@ class DebouncedSettingsField extends StatefulWidget {
     required this.onChangedDebounced,
     this.keyboardType = TextInputType.text,
     this.suffixIcon,
-    this.readOnly = false, // Added readOnly property
+    this.readOnly = false,
+    this.obscureText = false,
+    this.validator,
+    this.hint,
+    this.debounce = const Duration(milliseconds: 500),
   });
 
   final TextEditingController controller;
@@ -24,7 +30,13 @@ class DebouncedSettingsField extends StatefulWidget {
   final VoidCallback onChangedDebounced;
   final TextInputType keyboardType;
   final Widget? suffixIcon;
-  final bool readOnly; // Declared readOnly field
+  final bool readOnly;
+  final bool obscureText;
+
+  /// Optional validator; returning a non-null string shows an error hint.
+  final String? Function(String value)? validator;
+  final String? hint;
+  final Duration debounce;
 
   @override
   State<DebouncedSettingsField> createState() => _DebouncedSettingsFieldState();
@@ -32,6 +44,7 @@ class DebouncedSettingsField extends StatefulWidget {
 
 class _DebouncedSettingsFieldState extends State<DebouncedSettingsField> {
   Timer? _debounce;
+  String? _error;
 
   @override
   void dispose() {
@@ -39,9 +52,14 @@ class _DebouncedSettingsFieldState extends State<DebouncedSettingsField> {
     super.dispose();
   }
 
-  void _onChanged(String _) {
+  void _onChanged(String value) {
+    final error = widget.validator?.call(value);
+    if (error != _error) setState(() => _error = error);
+
+    if (error != null) return; // Don't persist invalid values.
+
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 500), widget.onChangedDebounced);
+    _debounce = Timer(widget.debounce, widget.onChangedDebounced);
   }
 
   @override
@@ -50,24 +68,15 @@ class _DebouncedSettingsFieldState extends State<DebouncedSettingsField> {
       controller: widget.controller,
       onChanged: _onChanged,
       keyboardType: widget.keyboardType,
-      readOnly: widget.readOnly, // Passed readOnly to the native TextField
-      style: const TextStyle(fontSize: 13, color: Colors.white70),
+      readOnly: widget.readOnly,
+      obscureText: widget.obscureText,
+      style: AppTypography.bodyLg,
       decoration: InputDecoration(
         labelText: widget.label,
-        labelStyle: const TextStyle(color: Colors.grey, fontSize: 13),
-        prefixIcon: Icon(widget.prefixIcon, size: 16, color: Colors.grey),
+        hintText: widget.hint,
+        errorText: _error,
+        prefixIcon: Icon(widget.prefixIcon, size: 18),
         suffixIcon: widget.suffixIcon,
-        filled: true,
-        fillColor: AppColors.background,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Colors.teal, width: 1.5),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.border, width: 1),
-        ),
       ),
     );
   }

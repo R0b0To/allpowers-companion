@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// Small tappable tile showing a label and a formatted time, used for the
-/// automation window's start/end time pickers.
+/// A tappable tile displaying a time label and formatted time value.
+/// Used for automation window start/end time pickers.
 class TimeSelectorTile extends StatelessWidget {
   const TimeSelectorTile({
     super.key,
@@ -19,38 +19,52 @@ class TimeSelectorTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.background,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border, width: 1),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.access_time, size: 16, color: Colors.grey),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(fontSize: 9, color: Colors.grey),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      formattedTime,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white70),
-                    ),
-                  ],
+      child: Semantics(
+        label: '$label: $formattedTime',
+        button: true,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: AppRadius.mdBR,
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: AppSpacing.md,
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: AppRadius.mdBR,
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.schedule_outlined,
+                  size: 16,
+                  color: AppColors.textTertiary,
                 ),
-              ),
-            ],
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label, style: AppTypography.labelSm),
+                      const SizedBox(height: 2),
+                      Text(
+                        formattedTime,
+                        style: AppTypography.headingSm.copyWith(
+                          color: AppColors.teal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right,
+                  size: 16,
+                  color: AppColors.textTertiary,
+                ),
+              ],
+            ),
           ),
         ),
       ),

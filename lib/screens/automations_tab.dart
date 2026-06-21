@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 import '../l10n/app_strings.dart';
 import '../models/automation_settings.dart';
 import '../services/ble_service.dart';
+import '../services/tapo_service.dart';
 import '../services/webhook_service.dart';
-import '../services/tapo_service.dart'; 
 import '../theme/app_theme.dart';
 import '../widgets/debounced_settings_field.dart';
+import '../widgets/section_card.dart';
 import '../widgets/time_selector_tile.dart';
 
 class AutomationsTab extends StatefulWidget {
@@ -16,7 +17,7 @@ class AutomationsTab extends StatefulWidget {
     required this.strings,
     required this.settings,
     required this.webhooks,
-    required this.tapo, 
+    required this.tapo,
     required this.onSettingsChanged,
   });
 
@@ -32,40 +33,45 @@ class AutomationsTab extends StatefulWidget {
 }
 
 class _AutomationsTabState extends State<AutomationsTab> {
-  late final _tapoOnController =
-      TextEditingController(text: widget.settings.tapoOnUrl);
-  late final _tapoOffController =
-      TextEditingController(text: widget.settings.tapoOffUrl);
-  late final _lowController =
-      TextEditingController(text: widget.settings.lowThreshold.toString());
-  late final _highController =
-      TextEditingController(text: widget.settings.highThreshold.toString());
+  // Automation fields
+  late final TextEditingController _onUrlCtrl;
+  late final TextEditingController _offUrlCtrl;
+  late final TextEditingController _lowCtrl;
+  late final TextEditingController _highCtrl;
 
-  // Tapo Local Controllers
-  late final _tapoIpController =
-      TextEditingController(text: widget.settings.tapoIp);
-  late final _tapoEmailController =
-      TextEditingController(text: widget.settings.tapoEmail);
-  late final _tapoPasswordController =
-      TextEditingController(text: widget.settings.tapoPassword);
+  // Local Tapo fields
+  late final TextEditingController _ipCtrl;
+  late final TextEditingController _emailCtrl;
+  late final TextEditingController _passwordCtrl;
 
   bool _testingTapo = false;
-  bool _testingOnAction = false;
-  bool _testingOffAction = false;
+  bool _testingOn = false;
+  bool _testingOff = false;
 
+  @override
+  void initState() {
+    super.initState();
+    final s = widget.settings;
+    _onUrlCtrl = TextEditingController(text: s.tapoOnUrl);
+    _offUrlCtrl = TextEditingController(text: s.tapoOffUrl);
+    _lowCtrl = TextEditingController(text: s.lowThreshold.toString());
+    _highCtrl = TextEditingController(text: s.highThreshold.toString());
+    _ipCtrl = TextEditingController(text: s.tapoIp);
+    _emailCtrl = TextEditingController(text: s.tapoEmail);
+    _passwordCtrl = TextEditingController(text: s.tapoPassword);
+  }
 
   @override
   void didUpdateWidget(AutomationsTab old) {
     super.didUpdateWidget(old);
-    _syncIfChanged(_tapoOnController, widget.settings.tapoOnUrl);
-    _syncIfChanged(_tapoOffController, widget.settings.tapoOffUrl);
-    _syncIfChanged(_lowController, widget.settings.lowThreshold.toString());
-    _syncIfChanged(_highController, widget.settings.highThreshold.toString());
-    
-    // Sync Tapo credentials
-    _syncIfChanged(_tapoIpController, widget.settings.tapoIp);
-    _syncIfChanged(_tapoEmailController, widget.settings.tapoEmail);
-    _syncIfChanged(_tapoPasswordController, widget.settings.tapoPassword);
+    final s = widget.settings;
+    _syncIfChanged(_onUrlCtrl, s.tapoOnUrl);
+    _syncIfChanged(_offUrlCtrl, s.tapoOffUrl);
+    _syncIfChanged(_lowCtrl, s.lowThreshold.toString());
+    _syncIfChanged(_highCtrl, s.highThreshold.toString());
+    _syncIfChanged(_ipCtrl, s.tapoIp);
+    _syncIfChanged(_emailCtrl, s.tapoEmail);
+    _syncIfChanged(_passwordCtrl, s.tapoPassword);
   }
 
   void _syncIfChanged(TextEditingController c, String value) {
@@ -74,407 +80,409 @@ class _AutomationsTabState extends State<AutomationsTab> {
 
   @override
   void dispose() {
-    _tapoOnController.dispose();
-    _tapoOffController.dispose();
-    _lowController.dispose();
-    _highController.dispose();
-    _tapoIpController.dispose();
-    _tapoEmailController.dispose();
-    _tapoPasswordController.dispose();
+    for (final c in [
+      _onUrlCtrl, _offUrlCtrl, _lowCtrl, _highCtrl,
+      _ipCtrl, _emailCtrl, _passwordCtrl,
+    ]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  int _parseThreshold(String text, int fallback) {
-    final v = int.tryParse(text);
-    if (v == null) return fallback;
-    return v.clamp(0, 100);
-  }
+  // ── Settings persistence ────────────────────────────────────────────────────
 
   void _onFieldsChanged() {
+    final low = int.tryParse(_lowCtrl.text) ?? widget.settings.lowThreshold;
+    final high = int.tryParse(_highCtrl.text) ?? widget.settings.highThreshold;
+
     widget.onSettingsChanged(widget.settings.copyWith(
-      tapoOnUrl: _tapoOnController.text,
-      tapoOffUrl: _tapoOffController.text,
-      lowThreshold:
-          _parseThreshold(_lowController.text, widget.settings.lowThreshold),
-      highThreshold:
-          _parseThreshold(_highController.text, widget.settings.highThreshold),
-      tapoIp: _tapoIpController.text,
-      tapoEmail: _tapoEmailController.text,
-      tapoPassword: _tapoPasswordController.text,
+      tapoOnUrl: _onUrlCtrl.text,
+      tapoOffUrl: _offUrlCtrl.text,
+      lowThreshold: low,
+      highThreshold: high,
+      tapoIp: _ipCtrl.text,
+      tapoEmail: _emailCtrl.text,
+      tapoPassword: _passwordCtrl.text,
     ));
   }
 
   Future<void> _selectTime(bool isStart) async {
     final initial =
         isStart ? widget.settings.startTime : widget.settings.endTime;
-    final selected = await showTimePicker(
+    final picked = await showTimePicker(
       context: context,
       initialTime: initial,
       builder: (context, child) =>
           Theme(data: AppTheme.timePickerTheme, child: child!),
     );
-    if (selected == null) return;
-    widget.onSettingsChanged(isStart
-        ? widget.settings.copyWith(startTime: selected)
-        : widget.settings.copyWith(endTime: selected));
+    if (picked == null) return;
+    widget.onSettingsChanged(
+      isStart
+          ? widget.settings.copyWith(startTime: picked)
+          : widget.settings.copyWith(endTime: picked),
+    );
   }
 
-  /// Helper to execute an ON/OFF action, prioritizing local Tapo if configured.
-  Future<String> _executeAutomationAction({required bool turnOn}) async {
+  // ── Action execution ────────────────────────────────────────────────────────
+
+  /// Executes the configured ON or OFF action, trying local Tapo first and
+  /// falling back to the webhook URL. Returns a user-visible result message.
+  Future<String> _executeAction({required bool on}) async {
     final s = widget.strings;
     final settings = widget.settings;
-    bool localSuccess = false;
-    String actionMessage = '';
+    final action = on ? 'ON' : 'OFF';
 
-    if (settings.useLocalTapo) {
-      if (settings.tapoIp.isEmpty || settings.tapoEmail.isEmpty || settings.tapoPassword.isEmpty) {
-        actionMessage = s.t('tapo_credentials_incomplete');
-      } else {
-        actionMessage =
-            turnOn ? s.t('tapo_attempting_local_on') : s.t('tapo_attempting_local_off');
-        localSuccess = await widget.tapo.setOn(
-          ip: settings.tapoIp,
-          email: settings.tapoEmail,
-          password: settings.tapoPassword,
-          on: turnOn,
-        );
-        if (localSuccess) {
-          actionMessage =
-              turnOn ? s.t('tapo_local_on_successful') : s.t('tapo_local_off_successful');
-        } else {
-          actionMessage =
-              turnOn ? s.t('tapo_local_on_failed') : s.t('tapo_local_off_failed');
-        }
+    // 1. Try local Tapo if configured.
+    if (settings.hasLocalTapoCredentials) {
+      final success = await widget.tapo.setOn(
+        ip: settings.tapoIp,
+        email: settings.tapoEmail,
+        password: settings.tapoPassword,
+        on: on,
+      );
+      if (success) {
+        return on
+            ? s.t('tapo_local_on_successful')
+            : s.t('tapo_local_off_successful');
       }
+      // Local failed — continue to webhook fallback.
     }
 
-    if (!localSuccess) { // If local control failed or wasn't used
-      final webhookUrl = turnOn ? settings.tapoOnUrl : settings.tapoOffUrl;
-      if (webhookUrl.isEmpty) {
-        actionMessage += (actionMessage.isEmpty ? '' : '\n') + s.t('webhook_url_missing');
-      } else {
-        actionMessage += (actionMessage.isEmpty ? '' : '\n') + s.t('executing_webhook');
-        final code = await widget.webhooks.test(webhookUrl);
-        if (code == null) {
-          actionMessage += ' ${s.t('webhook_failed')}';
-        } else if (code == 200) {
-          actionMessage += ' ${s.t('webhook_successful_prefix')} $code).';
-        } else {
-          actionMessage += ' ${s.t('webhook_failed_with_code_prefix')} $code).';
-        }
-      }
+    // 2. Try webhook.
+    final webhookUrl = on ? settings.tapoOnUrl : settings.tapoOffUrl;
+    if (webhookUrl.isEmpty) {
+      return s.t('webhook_url_missing');
     }
-    return actionMessage;
+
+    final code = await widget.webhooks.test(webhookUrl);
+    if (code == null) return s.t('webhook_failed');
+    if (code == 200) return '${s.t('webhook_successful_prefix')} (HTTP $code)';
+    return '${s.t('webhook_failed_with_code_prefix')} (HTTP $code)';
   }
 
   Future<void> _testOnAction() async {
-    setState(() => _testingOnAction = true);
-    final result = await _executeAutomationAction(turnOn: true);
-    setState(() => _testingOnAction = false);
-    if (!mounted) return;
-    _showSnack(result, color: result.contains('successful') || result.contains('riuscito')
-        ? Colors.green
-        : Colors.red);
+    if (_testingOn) return;
+    setState(() => _testingOn = true);
+    try {
+      final result = await _executeAction(on: true);
+      if (!mounted) return;
+      _showResult(result);
+    } finally {
+      if (mounted) setState(() => _testingOn = false);
+    }
   }
 
   Future<void> _testOffAction() async {
-    setState(() => _testingOffAction = true);
-    final result = await _executeAutomationAction(turnOn: false);
-    setState(() => _testingOffAction = false);
-    if (!mounted) return;
-    _showSnack(result, color: result.contains('successful') || result.contains('riuscito')
-        ? Colors.green
-        : Colors.red);
+    if (_testingOff) return;
+    setState(() => _testingOff = true);
+    try {
+      final result = await _executeAction(on: false);
+      if (!mounted) return;
+      _showResult(result);
+    } finally {
+      if (mounted) setState(() => _testingOff = false);
+    }
   }
 
   Future<void> _testLocalTapo() async {
-    final s = widget.strings;
-    final ip = _tapoIpController.text.trim();
-    final email = _tapoEmailController.text.trim();
-    final password = _tapoPasswordController.text;
+    if (_testingTapo) return;
+
+    final ip = _ipCtrl.text.trim();
+    final email = _emailCtrl.text.trim();
+    final password = _passwordCtrl.text;
 
     if (ip.isEmpty || email.isEmpty || password.isEmpty) {
-      _showSnack(s.t('tapo_fields_incomplete'), color: Colors.amber);
+      _showResult(widget.strings.t('tapo_fields_incomplete'), isError: true);
       return;
     }
 
     setState(() => _testingTapo = true);
-    _showSnack(s.t('tapo_attempting_connection'), color: Colors.blueGrey);
-
-    final result = await widget.tapo.test(
-      ip: ip,
-      email: email,
-      password: password,
-    );
-
-    setState(() => _testingTapo = false);
-    if (!mounted) return;
-
-    final isSuccess = result.startsWith('Connected');
-    _showSnack(result, color: isSuccess ? Colors.green : Colors.red);
+    try {
+      final result = await widget.tapo.test(
+        ip: ip,
+        email: email,
+        password: password,
+      );
+      if (!mounted) return;
+      final isSuccess = result.startsWith('Connected');
+      _showResult(result, isError: !isSuccess);
+    } finally {
+      if (mounted) setState(() => _testingTapo = false);
+    }
   }
 
-  void _showSnack(String message, {Color? color}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(backgroundColor: color, content: Text(message)),
-    );
+  void _showResult(String message, {bool? isError}) {
+    final success = isError == null
+        ? message.toLowerCase().contains('success') ||
+            message.toLowerCase().contains('ok') ||
+            message.toLowerCase().contains('connected') ||
+            message.toLowerCase().contains('riuscito') ||
+            message.toLowerCase().contains('connesso')
+        : !isError;
+
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                success ? Icons.check_circle_outline : Icons.error_outline,
+                size: 18,
+                color: success ? AppColors.success : AppColors.error,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(child: Text(message)),
+            ],
+          ),
+          backgroundColor: AppColors.surfaceElevated,
+          duration: const Duration(seconds: 4),
+        ),
+      );
   }
 
   String _fmt(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  // ── Validators ──────────────────────────────────────────────────────────────
+
+  String? _validateThreshold(String value) {
+    final v = int.tryParse(value);
+    if (v == null || v < 0 || v > 100) {
+      return widget.strings.t('threshold_error');
+    }
+    return null;
+  }
+
+  // ── Build ───────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final s = widget.strings;
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Text(
-                s.t('tab_automations'),
-                style: const TextStyle(
-                    fontSize: 22, fontWeight: FontWeight.bold),
-              ),
+    final settings = widget.settings;
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.xl,
+              AppSpacing.lg,
+              AppSpacing.xxl,
             ),
-
-            _buildSmartChargingCard(s),
-            const SizedBox(height: 16),
-            _buildTapoLocalCard(s),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSmartChargingCard(AppStrings s) {
-    final enabled = widget.settings.enabled;
-    final useLocalTapo = widget.settings.useLocalTapo;
-    return Card(
-      color: AppColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: enabled ? Colors.teal.withValues(alpha: 0.5) : AppColors.border,
-          width: 1.5,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Text(s.t('tab_automations'), style: AppTypography.displaySm),
+                const SizedBox(height: AppSpacing.xs),
+                Text(s.t('automation_description'), style: AppTypography.bodyMd),
+                const SizedBox(height: AppSpacing.xxl),
+
+                // ── Smart Charging card ──────────────────────────────────────
+                SectionCard(
+                  title: s.t('automation'),
+                  icon: Icons.auto_mode_rounded,
+                  isActive: settings.enabled,
+                  switchValue: settings.enabled,
+                  onSwitchChanged: (v) =>
+                      widget.onSettingsChanged(settings.copyWith(enabled: v)),
                   children: [
-                    const Icon(Icons.sync_alt, color: Colors.teal),
-                    const SizedBox(width: 10),
-                    Text(s.t('automation'),
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.bold)),
+                    // Time window
+                    Text(
+                      'Active window',
+                      style: AppTypography.labelLg,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Row(
+                      children: [
+                        TimeSelectorTile(
+                          label: s.t('start_time'),
+                          formattedTime: _fmt(settings.startTime),
+                          onTap: () => _selectTime(true),
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        TimeSelectorTile(
+                          label: s.t('end_time'),
+                          formattedTime: _fmt(settings.endTime),
+                          onTap: () => _selectTime(false),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+
+                    // Thresholds
+                    Text(
+                      'Battery thresholds',
+                      style: AppTypography.labelLg,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DebouncedSettingsField(
+                            controller: _lowCtrl,
+                            label: s.t('low_limit'),
+                            prefixIcon: Icons.battery_alert_rounded,
+                            keyboardType: TextInputType.number,
+                            onChangedDebounced: _onFieldsChanged,
+                            validator: _validateThreshold,
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Expanded(
+                          child: DebouncedSettingsField(
+                            controller: _highCtrl,
+                            label: s.t('high_limit'),
+                            prefixIcon: Icons.battery_charging_full_rounded,
+                            keyboardType: TextInputType.number,
+                            onChangedDebounced: _onFieldsChanged,
+                            validator: _validateThreshold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+
+                    // Plug control
+                    Text(
+                      s.t('plug_control_actions'),
+                      style: AppTypography.labelLg,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    _ActionField(
+                      controller: _onUrlCtrl,
+                      label: settings.useLocalTapo
+                          ? s.t('on_webhook_url_fallback')
+                          : s.t('on_webhook_url'),
+                      icon: Icons.power_settings_new_rounded,
+                      iconColor: AppColors.success,
+                      isTesting: _testingOn,
+                      onTest: _testOnAction,
+                      onChanged: _onFieldsChanged,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    _ActionField(
+                      controller: _offUrlCtrl,
+                      label: settings.useLocalTapo
+                          ? s.t('off_webhook_url_fallback')
+                          : s.t('off_webhook_url'),
+                      icon: Icons.power_off_rounded,
+                      iconColor: AppColors.error,
+                      isTesting: _testingOff,
+                      onTest: _testOffAction,
+                      onChanged: _onFieldsChanged,
+                    ),
                   ],
                 ),
-                Switch(
-                  value: enabled,
-                  activeColor: Colors.teal,
-                  onChanged: (v) => widget.onSettingsChanged(
-                      widget.settings.copyWith(enabled: v)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              s.t('automation_description'),
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            const SizedBox(height: 16),
 
-            Row(
-              children: [
-                TimeSelectorTile(
-                  label: s.t('start_time'),
-                  formattedTime: _fmt(widget.settings.startTime),
-                  onTap: () => _selectTime(true),
-                ),
-                const SizedBox(width: 10),
-                TimeSelectorTile(
-                  label: s.t('end_time'),
-                  formattedTime: _fmt(widget.settings.endTime),
-                  onTap: () => _selectTime(false),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
 
-            Row(
-              children: [
-                Expanded(
-                  child: DebouncedSettingsField(
-                    controller: _lowController,
-                    label: s.t('low_limit'),
-                    prefixIcon: Icons.battery_alert,
-                    keyboardType: TextInputType.number,
-                    onChangedDebounced: _onFieldsChanged,
+                // ── Local Tapo card ──────────────────────────────────────────
+                SectionCard(
+                  title: s.t('local_tapo_title'),
+                  icon: Icons.wifi_tethering_rounded,
+                  description: s.t('local_tapo_description'),
+                  isActive: settings.useLocalTapo,
+                  switchValue: settings.useLocalTapo,
+                  onSwitchChanged: (v) => widget.onSettingsChanged(
+                    settings.copyWith(useLocalTapo: v),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: DebouncedSettingsField(
-                    controller: _highController,
-                    label: s.t('high_limit'),
-                    prefixIcon: Icons.battery_charging_full,
-                    keyboardType: TextInputType.number,
-                    onChangedDebounced: _onFieldsChanged,
-                  ),
+                  children: settings.useLocalTapo
+                      ? [
+                          DebouncedSettingsField(
+                            controller: _ipCtrl,
+                            label: s.t('tapo_ip_label'),
+                            prefixIcon: Icons.router_rounded,
+                            onChangedDebounced: _onFieldsChanged,
+                            keyboardType: TextInputType.url,
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          DebouncedSettingsField(
+                            controller: _emailCtrl,
+                            label: s.t('tapo_email_label'),
+                            prefixIcon: Icons.email_outlined,
+                            onChangedDebounced: _onFieldsChanged,
+                            keyboardType: TextInputType.emailAddress,
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          DebouncedSettingsField(
+                            controller: _passwordCtrl,
+                            label: s.t('tapo_password_label'),
+                            prefixIcon: Icons.lock_outline_rounded,
+                            onChangedDebounced: _onFieldsChanged,
+                            obscureText: true,
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _testingTapo ? null : _testLocalTapo,
+                              icon: _testingTapo
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.phonelink_ring_rounded),
+                              label: Text(s.t('test_local_handshake')),
+                            ),
+                          ),
+                        ]
+                      : [],
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-
-            const Divider(color: AppColors.border),
-            const SizedBox(height: 12),
-
-            // --- Plug Control Actions Section ---
-            Text(s.t('plug_control_actions'),
-                style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.8)),
-            const SizedBox(height: 10),
-
-            // ON Action
-            DebouncedSettingsField(
-              controller: _tapoOnController,
-              label: useLocalTapo
-                  ? s.t('on_webhook_url_fallback')
-                  : s.t('on_webhook_url'),
-              prefixIcon: Icons.arrow_downward,
-              onChangedDebounced: _onFieldsChanged,
-              readOnly: useLocalTapo && _tapoOnController.text.isEmpty, // Make read-only if local is on and no URL set
-              suffixIcon: IconButton(
-                icon: _testingOnAction
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.send_rounded, color: Colors.green, size: 18),
-                onPressed: _testingOnAction ? null : _testOnAction,
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // OFF Action
-            DebouncedSettingsField(
-              controller: _tapoOffController,
-              label: useLocalTapo
-                  ? s.t('off_webhook_url_fallback')
-                  : s.t('off_webhook_url'),
-              prefixIcon: Icons.arrow_upward,
-              onChangedDebounced: _onFieldsChanged,
-              readOnly: useLocalTapo && _tapoOffController.text.isEmpty, // Make read-only if local is on and no URL set
-              suffixIcon: IconButton(
-                icon: _testingOffAction
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.send_rounded, color: Colors.redAccent, size: 18),
-                onPressed: _testingOffAction ? null : _testOffAction,
-              ),
-            ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
+}
 
-  Widget _buildTapoLocalCard(AppStrings s) {
-    final useLocal = widget.settings.useLocalTapo;
-    return Card(
-      color: AppColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: useLocal ? Colors.teal.withValues(alpha: 0.5) : AppColors.border,
-          width: 1.5,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.wifi_tethering, color: Colors.teal),
-                    const SizedBox(width: 10),
-                    Text(s.t('local_tapo_title'),
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                Switch(
-                  value: useLocal,
-                  activeColor: Colors.teal,
-                  onChanged: (v) => widget.onSettingsChanged(
-                      widget.settings.copyWith(useLocalTapo: v)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              s.t('local_tapo_description'),
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            
-            if (useLocal) ...[
-              const SizedBox(height: 16),
-              DebouncedSettingsField(
-                controller: _tapoIpController,
-                label: s.t('tapo_ip_label'),
-                prefixIcon: Icons.wifi,
-                onChangedDebounced: _onFieldsChanged,
+/// A URL field with an inline test button.
+class _ActionField extends StatelessWidget {
+  const _ActionField({
+    required this.controller,
+    required this.label,
+    required this.icon,
+    required this.iconColor,
+    required this.isTesting,
+    required this.onTest,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final IconData icon;
+  final Color iconColor;
+  final bool isTesting;
+  final VoidCallback onTest;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DebouncedSettingsField(
+      controller: controller,
+      label: label,
+      prefixIcon: icon,
+      keyboardType: TextInputType.url,
+      onChangedDebounced: onChanged,
+      suffixIcon: Padding(
+        padding: const EdgeInsets.only(right: 4),
+        child: isTesting
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : IconButton(
+                icon: Icon(Icons.send_rounded, size: 18, color: iconColor),
+                tooltip: 'Test',
+                onPressed: onTest,
               ),
-              const SizedBox(height: 12),
-              DebouncedSettingsField(
-                controller: _tapoEmailController,
-                label: s.t('tapo_email_label'),
-                prefixIcon: Icons.email_outlined,
-                onChangedDebounced: _onFieldsChanged,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _tapoPasswordController,
-                obscureText: true,
-                onChanged: (_) => _onFieldsChanged(),
-                style: const TextStyle(fontSize: 14),
-                decoration: InputDecoration(
-                  labelText: s.t('tapo_password_label'),
-                  prefixIcon: const Icon(Icons.lock_outline, size: 18),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _testingTapo ? null : _testLocalTapo,
-                  icon: _testingTapo 
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.phonelink_ring_rounded),
-                  label: Text(s.t('test_local_handshake')),
-                ),
-              ),
-            ]
-          ],
-        ),
       ),
     );
   }
