@@ -12,8 +12,9 @@ enum _Range { day, week, month, all }
 /// Displays battery and power trend graphs derived from [EnergyLogService]'s
 /// periodically-sampled history.
 ///
-/// Receives [EnergyLogService] from [MainShell] — creates nothing itself,
-/// matching the pattern used by the other tabs.
+/// Both charts share a synchronised crosshair: tapping or dragging on either
+/// chart moves the crosshair on both simultaneously and reveals a detail card
+/// showing the exact reading at that moment.
 class EnergyTab extends StatefulWidget {
   const EnergyTab({
     super.key,
@@ -31,24 +32,41 @@ class EnergyTab extends StatefulWidget {
 class _EnergyTabState extends State<EnergyTab> {
   _Range _range = _Range.day;
 
-  Duration? get _rangeDuration {
-    switch (_range) {
-      case _Range.day:
-        return const Duration(hours: 24);
-      case _Range.week:
-        return const Duration(days: 7);
-      case _Range.month:
-        return const Duration(days: 30);
-      case _Range.all:
-        return null;
-    }
-  }
+  /// Raw interpolated time reported by either chart's drag gesture.
+  /// null = no active selection.
+  DateTime? _selectedTime;
+
+  Duration? get _rangeDuration => switch (_range) {
+        _Range.day => const Duration(hours: 24),
+        _Range.week => const Duration(days: 7),
+        _Range.month => const Duration(days: 30),
+        _Range.all => null,
+      };
 
   List<EnergyLogEntry> _filteredEntries() {
-    final duration = _rangeDuration;
-    if (duration == null) return widget.energyLog.entries;
-    return widget.energyLog.since(duration);
+    final d = _rangeDuration;
+    return d == null ? widget.energyLog.entries : widget.energyLog.since(d);
   }
+
+  /// The entry closest to [time] within the currently filtered set, or null.
+  EnergyLogEntry? _nearestEntry(DateTime time) {
+    final entries = _filteredEntries();
+    if (entries.isEmpty) return null;
+    final ms = time.millisecondsSinceEpoch;
+    EnergyLogEntry? nearest;
+    double? minDist;
+    for (final e in entries) {
+      final d = (e.timestamp.millisecondsSinceEpoch - ms).abs().toDouble();
+      if (minDist == null || d < minDist) {
+        minDist = d;
+        nearest = e;
+      }
+    }
+    return nearest;
+  }
+
+  void _onSelect(DateTime? t) => setState(() => _selectedTime = t);
+  void _clearSelection() => setState(() => _selectedTime = null);
 
   @override
   Widget build(BuildContext context) {
@@ -67,9 +85,12 @@ class _EnergyTabState extends State<EnergyTab> {
 
     final s = widget.strings;
     final entries = _filteredEntries();
+    final selectedEntry =
+        _selectedTime != null ? _nearestEntry(_selectedTime!) : null;
 
     return CustomScrollView(
       slivers: [
+        // ── Header ──────────────────────────────────────────────────────────
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -84,17 +105,15 @@ class _EnergyTabState extends State<EnergyTab> {
                 Row(
                   children: [
                     Expanded(
-                      child:
-                          Text(s.t('tab_energy'), style: AppTypography.displaySm),
+                      child: Text(s.t('tab_energy'),
+                          style: AppTypography.displaySm),
                     ),
                     if (widget.energyLog.entries.isNotEmpty)
                       IconButton(
                         onPressed: () => _confirmClear(context),
                         tooltip: s.t('clear_energy_log'),
-                        icon: const Icon(
-                          Icons.delete_outline_rounded,
-                          color: AppColors.textTertiary,
-                        ),
+                        icon: const Icon(Icons.delete_outline_rounded,
+                            color: AppColors.textTertiary),
                       ),
                   ],
                 ),
@@ -111,6 +130,8 @@ class _EnergyTabState extends State<EnergyTab> {
             ),
           ),
         ),
+
+        // ── Content ──────────────────────────────────────────────────────────
         if (entries.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
@@ -120,17 +141,12 @@ class _EnergyTabState extends State<EnergyTab> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(
-                      Icons.show_chart_rounded,
-                      size: 48,
-                      color: AppColors.textTertiary,
-                    ),
+                    const Icon(Icons.show_chart_rounded,
+                        size: 48, color: AppColors.textTertiary),
                     const SizedBox(height: AppSpacing.lg),
-                    Text(
-                      s.t('no_energy_data'),
-                      style: AppTypography.bodyMd,
-                      textAlign: TextAlign.center,
-                    ),
+                    Text(s.t('no_energy_data'),
+                        style: AppTypography.bodyMd,
+                        textAlign: TextAlign.center),
                   ],
                 ),
               ),
@@ -146,51 +162,95 @@ class _EnergyTabState extends State<EnergyTab> {
             ),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
+                // Aggregate stats strip
                 _StatsGrid(entries: entries, strings: s),
                 const SizedBox(height: AppSpacing.lg),
+
+                // ── Selection detail card ────────────────────────────────────
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  child: selectedEntry != null
+                      ? Padding(
+                          padding:
+                              const EdgeInsets.only(bottom: AppSpacing.lg),
+                          child: _DetailCard(
+                            entry: selectedEntry,
+                            strings: s,
+                            onDismiss: _clearSelection,
+                          ),
+                        )
+                      : Padding(
+                          padding:
+                              const EdgeInsets.only(bottom: AppSpacing.sm),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.touch_app_outlined,
+                                  size: 13,
+                                  color: AppColors.textTertiary),
+                              const SizedBox(width: AppSpacing.xs),
+                              Text(
+                                'Tap or drag on a chart to inspect a reading',
+                                style: AppTypography.labelSm,
+                              ),
+                            ],
+                          ),
+                        ),
+                ),
+
+                // ── Battery trend chart ──────────────────────────────────────
                 _ChartCard(
                   title: s.t('battery_trend'),
                   icon: Icons.battery_charging_full_rounded,
                   child: TimeSeriesChart(
-                    height: 140,
+                    height: 160,
                     valueLabel: (v) => '${v.round()}%',
                     timeLabel: _formatAxisTime,
                     minY: 0,
                     maxY: 100,
+                    onSelect: _onSelect,
+                    selectedTime: _selectedTime,
                     series: [
                       ChartSeries(
                         color: AppColors.teal,
                         fillGradient: true,
                         points: entries
                             .map((e) => ChartPoint(
-                                e.timestamp.toLocal(), e.batteryLevel.toDouble()))
+                                e.timestamp.toLocal(),
+                                e.batteryLevel.toDouble()))
                             .toList(),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: AppSpacing.lg),
+
+                // ── Power flow chart ─────────────────────────────────────────
                 _ChartCard(
                   title: s.t('power_flow'),
                   icon: Icons.bolt_rounded,
                   child: Column(
                     children: [
                       TimeSeriesChart(
-                        height: 140,
+                        height: 160,
                         valueLabel: (v) => '${v.round()}W',
                         timeLabel: _formatAxisTime,
+                        onSelect: _onSelect,
+                        selectedTime: _selectedTime,
                         series: [
                           ChartSeries(
                             color: AppColors.success,
                             points: entries
                                 .map((e) => ChartPoint(
-                                    e.timestamp.toLocal(), e.inputWatts.toDouble()))
+                                    e.timestamp.toLocal(),
+                                    e.inputWatts.toDouble()))
                                 .toList(),
                           ),
                           ChartSeries(
                             color: AppColors.error,
                             points: entries
-                                .map((e) => ChartPoint(e.timestamp.toLocal(),
+                                .map((e) => ChartPoint(
+                                    e.timestamp.toLocal(),
                                     e.outputWatts.toDouble()))
                                 .toList(),
                           ),
@@ -199,9 +259,13 @@ class _EnergyTabState extends State<EnergyTab> {
                       const SizedBox(height: AppSpacing.md),
                       Row(
                         children: [
-                          _Legend(color: AppColors.success, label: s.t('charging')),
+                          _Legend(
+                              color: AppColors.success,
+                              label: s.t('charging')),
                           const SizedBox(width: AppSpacing.lg),
-                          _Legend(color: AppColors.error, label: s.t('discharging')),
+                          _Legend(
+                              color: AppColors.error,
+                              label: s.t('discharging')),
                         ],
                       ),
                     ],
@@ -218,10 +282,9 @@ class _EnergyTabState extends State<EnergyTab> {
     final now = DateTime.now();
     final sameDay =
         t.year == now.year && t.month == now.month && t.day == now.day;
-    if (sameDay) {
-      return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-    }
-    return '${t.day.toString().padLeft(2, '0')}/${t.month.toString().padLeft(2, '0')}';
+    return sameDay
+        ? '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}'
+        : '${t.day.toString().padLeft(2, '0')}/${t.month.toString().padLeft(2, '0')}';
   }
 
   Future<void> _confirmClear(BuildContext context) async {
@@ -231,31 +294,215 @@ class _EnergyTabState extends State<EnergyTab> {
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.surfaceElevated,
         shape: RoundedRectangleBorder(borderRadius: AppRadius.mdBR),
-        title: Text(s.t('clear_energy_log'), style: AppTypography.headingMd),
-        content:
-            Text(s.t('clear_energy_log_confirm'), style: AppTypography.bodyMd),
+        title:
+            Text(s.t('clear_energy_log'), style: AppTypography.headingMd),
+        content: Text(s.t('clear_energy_log_confirm'),
+            style: AppTypography.bodyMd),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: Text(
-              s.t('cancel'),
-              style:
-                  AppTypography.headingSm.copyWith(color: AppColors.textSecondary),
-            ),
+            child: Text(s.t('cancel'),
+                style: AppTypography.headingSm
+                    .copyWith(color: AppColors.textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: Text(
-              s.t('clear_energy_log'),
-              style: AppTypography.headingSm.copyWith(color: AppColors.error),
+            child: Text(s.t('clear_energy_log'),
+                style: AppTypography.headingSm
+                    .copyWith(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      _clearSelection();
+      await widget.energyLog.clear();
+    }
+  }
+}
+
+// ── Detail inspection card ────────────────────────────────────────────────────
+
+class _DetailCard extends StatelessWidget {
+  const _DetailCard({
+    required this.entry,
+    required this.strings,
+    required this.onDismiss,
+  });
+
+  final EnergyLogEntry entry;
+  final AppStrings strings;
+  final VoidCallback onDismiss;
+
+  String _formatDate(DateTime t) {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final now = DateTime.now();
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return 'Today';
+    }
+    return '${days[t.weekday - 1]} ${t.day} ${months[t.month - 1]}';
+  }
+
+  String _formatTime(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final local = entry.timestamp.toLocal();
+    final battColor = AppColors.batteryColor(entry.batteryLevel);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md, vertical: AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceElevated,
+        borderRadius: AppRadius.mdBR,
+        border: Border.all(color: AppColors.teal.withOpacity(0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Timestamp
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_formatDate(local), style: AppTypography.labelSm),
+              Text(
+                _formatTime(local),
+                style: AppTypography.headingMd.copyWith(color: AppColors.teal),
+              ),
+            ],
+          ),
+
+          // Divider
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            child: Container(width: 1, height: 32, color: AppColors.border),
+          ),
+
+          // Metrics
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _DetailMetric(
+                  icon: Icons.battery_std_rounded,
+                  color: battColor,
+                  label: 'Battery',
+                  value: '${entry.batteryLevel}%',
+                ),
+                _DetailMetric(
+                  icon: Icons.arrow_downward_rounded,
+                  color: AppColors.success,
+                  label: strings.t('charging'),
+                  value: '${entry.inputWatts} W',
+                ),
+                _DetailMetric(
+                  icon: Icons.arrow_upward_rounded,
+                  color: AppColors.error,
+                  label: strings.t('discharging'),
+                  value: '${entry.outputWatts} W',
+                ),
+                // Outlet states
+                _OutletStateColumn(entry: entry),
+              ],
+            ),
+          ),
+
+          // Dismiss
+          GestureDetector(
+            onTap: onDismiss,
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.only(left: AppSpacing.sm),
+              child: Icon(Icons.close_rounded,
+                  size: 16, color: AppColors.textTertiary),
             ),
           ),
         ],
       ),
     );
-    if (confirmed == true) await widget.energyLog.clear();
   }
 }
+
+class _DetailMetric extends StatelessWidget {
+  const _DetailMetric({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 10, color: color),
+            const SizedBox(width: 3),
+            Text(label, style: AppTypography.labelSm),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(value,
+            style: AppTypography.headingSm.copyWith(color: color)),
+      ],
+    );
+  }
+}
+
+/// Small column showing which outlets were active at the selected sample.
+class _OutletStateColumn extends StatelessWidget {
+  const _OutletStateColumn({required this.entry});
+  final EnergyLogEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget pill(String label, bool active) {
+      final color = active ? AppColors.teal : AppColors.textDisabled;
+      return Container(
+        margin: const EdgeInsets.only(bottom: 3),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withOpacity(active ? 0.12 : 0.06),
+          borderRadius: AppRadius.xsBR,
+        ),
+        child: Text(
+          label,
+          style: AppTypography.labelSm.copyWith(
+              color: color, fontSize: 8, letterSpacing: 0.3),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        pill('USB', entry.isUsbOn),
+        pill('AC', entry.isAcOn),
+        pill('DC', entry.isDcOn),
+      ],
+    );
+  }
+}
+
+// ── Range selector ────────────────────────────────────────────────────────────
 
 class _RangeSelector extends StatelessWidget {
   const _RangeSelector({
@@ -288,8 +535,11 @@ class _RangeSelector extends StatelessWidget {
               duration: const Duration(milliseconds: 180),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: selected ? AppColors.tealSurface : AppColors.surface,
-                borderRadius: BorderRadius.circular(AppRadius.full),
+                color: selected
+                    ? AppColors.tealSurface
+                    : AppColors.surface,
+                borderRadius:
+                    BorderRadius.circular(AppRadius.full),
                 border: Border.all(
                   color: selected
                       ? AppColors.teal.withOpacity(0.4)
@@ -299,7 +549,9 @@ class _RangeSelector extends StatelessWidget {
               child: Text(
                 entry.value,
                 style: AppTypography.labelMd.copyWith(
-                  color: selected ? AppColors.teal : AppColors.textSecondary,
+                  color: selected
+                      ? AppColors.teal
+                      : AppColors.textSecondary,
                 ),
               ),
             ),
@@ -310,8 +562,11 @@ class _RangeSelector extends StatelessWidget {
   }
 }
 
+// ── Chart card wrapper ────────────────────────────────────────────────────────
+
 class _ChartCard extends StatelessWidget {
-  const _ChartCard({required this.title, required this.icon, required this.child});
+  const _ChartCard(
+      {required this.title, required this.icon, required this.child});
 
   final String title;
   final IconData icon;
@@ -344,6 +599,8 @@ class _ChartCard extends StatelessWidget {
   }
 }
 
+// ── Legend dot + label ────────────────────────────────────────────────────────
+
 class _Legend extends StatelessWidget {
   const _Legend({required this.color, required this.label});
   final Color color;
@@ -357,7 +614,8 @@ class _Legend extends StatelessWidget {
         Container(
           width: 8,
           height: 8,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          decoration:
+              BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: AppSpacing.xs),
         Text(label, style: AppTypography.labelSm),
@@ -365,6 +623,8 @@ class _Legend extends StatelessWidget {
     );
   }
 }
+
+// ── Aggregate stats row ───────────────────────────────────────────────────────
 
 class _StatsGrid extends StatelessWidget {
   const _StatsGrid({required this.entries, required this.strings});
@@ -377,11 +637,16 @@ class _StatsGrid extends StatelessWidget {
     final inputs = entries.map((e) => e.inputWatts);
     final outputs = entries.map((e) => e.outputWatts);
 
-    final avgIn = inputs.isEmpty ? 0 : inputs.reduce((a, b) => a + b) / inputs.length;
-    final avgOut =
-        outputs.isEmpty ? 0 : outputs.reduce((a, b) => a + b) / outputs.length;
-    final peakIn = inputs.isEmpty ? 0 : inputs.reduce((a, b) => a > b ? a : b);
-    final peakOut = outputs.isEmpty ? 0 : outputs.reduce((a, b) => a > b ? a : b);
+    final avgIn = inputs.isEmpty
+        ? 0
+        : inputs.reduce((a, b) => a + b) ~/ inputs.length;
+    final avgOut = outputs.isEmpty
+        ? 0
+        : outputs.reduce((a, b) => a + b) ~/ outputs.length;
+    final peakIn =
+        inputs.isEmpty ? 0 : inputs.reduce((a, b) => a > b ? a : b);
+    final peakOut =
+        outputs.isEmpty ? 0 : outputs.reduce((a, b) => a > b ? a : b);
 
     return Row(
       children: [
@@ -390,7 +655,7 @@ class _StatsGrid extends StatelessWidget {
             icon: Icons.arrow_downward_rounded,
             iconColor: AppColors.success,
             title: strings.t('avg_input'),
-            value: '${avgIn.round()} W',
+            value: '$avgIn W',
             subtitle: '${strings.t('peak_input')}: $peakIn W',
           ),
         ),
@@ -400,7 +665,7 @@ class _StatsGrid extends StatelessWidget {
             icon: Icons.arrow_upward_rounded,
             iconColor: AppColors.error,
             title: strings.t('avg_output'),
-            value: '${avgOut.round()} W',
+            value: '$avgOut W',
             subtitle: '${strings.t('peak_output')}: $peakOut W',
           ),
         ),

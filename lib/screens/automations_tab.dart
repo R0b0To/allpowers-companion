@@ -130,7 +130,6 @@ class _AutomationsTabState extends State<AutomationsTab> {
   Future<String> _executeAction({required bool on}) async {
     final s = widget.strings;
     final settings = widget.settings;
-    final action = on ? 'ON' : 'OFF';
 
     // 1. Try local Tapo if configured.
     if (settings.hasLocalTapoCredentials) {

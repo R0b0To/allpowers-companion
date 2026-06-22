@@ -20,18 +20,26 @@ class ChartSeries {
   final List<ChartPoint> points;
   final Color color;
 
-  /// Whether to draw a soft gradient fill under the line (use for at most
-  /// one series per chart — stacking fills gets visually noisy).
+  /// Whether to draw a soft gradient fill under the line.
   final bool fillGradient;
 }
 
-/// A lightweight line chart for time-series data, styled to match the app's
-/// dark/teal design system.
+/// An interactive time-series line chart.
 ///
-/// Deliberately hand-rolled with [CustomPainter] rather than a charting
-/// package — the app only needs simple line plots, and avoiding a dependency
-/// keeps rendering fully under our control and avoids a pubspec bump.
-class TimeSeriesChart extends StatelessWidget {
+/// Tap or drag anywhere on the plot area to move a crosshair; the nearest
+/// data-point time is reported via [onSelect]. Pass that value back via
+/// [selectedTime] to keep two charts in sync (e.g. battery + power in the
+/// Energy tab).
+///
+/// ## Axis labels
+/// - Y: three labels (max, mid, min).
+/// - X: four evenly-spaced timestamps.
+///
+/// ## Dots
+/// Drawn at every real data point. Radius scales down automatically for
+/// dense data so the line stays readable: ≤50 pts → 3.5 px, ≤150 → 2.5 px,
+/// >150 → 1.5 px.
+class TimeSeriesChart extends StatefulWidget {
   const TimeSeriesChart({
     super.key,
     required this.series,
@@ -40,99 +48,164 @@ class TimeSeriesChart extends StatelessWidget {
     this.maxY,
     this.valueLabel,
     this.timeLabel,
+    this.onSelect,
+    this.selectedTime,
   });
 
   final List<ChartSeries> series;
   final double height;
 
-  /// Fixed Y bounds. If null, auto-computed from the data with padding.
+  /// Fixed Y bounds. If null, auto-computed from data with 10 % padding.
   final double? minY;
   final double? maxY;
 
-  /// Formats a Y-axis value for display (e.g. '42%', '120W').
+  /// Formats a Y value for the axis labels (e.g. '42 %', '120 W').
   final String Function(double value)? valueLabel;
 
-  /// Formats a [DateTime] for the X-axis end labels.
+  /// Formats a [DateTime] for the four X-axis tick labels.
   final String Function(DateTime time)? timeLabel;
+
+  /// Called with the nearest data-point time on tap/drag.
+  final ValueChanged<DateTime?>? onSelect;
+
+  /// External crosshair; pass the last [onSelect] value back to this param
+  /// to show a synchronised crosshair without holding state inside the chart.
+  final DateTime? selectedTime;
+
+  @override
+  State<TimeSeriesChart> createState() => _TimeSeriesChartState();
+}
+
+class _TimeSeriesChartState extends State<TimeSeriesChart> {
+  // Cached in build(); read by the gesture handler (called after build).
+  double _minX = 0;
+  double _maxX = 1;
+
+  void _handleTouch(double localX, double plotWidth) {
+    if (plotWidth <= 0 || _maxX <= _minX) return;
+
+    // Report the raw interpolated time — smooth crosshair movement.
+    final fraction = (localX / plotWidth).clamp(0.0, 1.0);
+    final ms = _minX + fraction * (_maxX - _minX);
+    widget.onSelect?.call(DateTime.fromMillisecondsSinceEpoch(ms.round()));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final allPoints = series.expand((s) => s.points).toList();
-    if (allPoints.isEmpty) {
-      return SizedBox(height: height);
-    }
+    final allPoints = widget.series.expand((s) => s.points).toList();
+    if (allPoints.isEmpty) return SizedBox(height: widget.height);
 
-    final times = allPoints.map((p) => p.time.millisecondsSinceEpoch);
-    final minX = times.reduce((a, b) => a < b ? a : b).toDouble();
-    final maxX = times.reduce((a, b) => a > b ? a : b).toDouble();
+    // ── X bounds ────────────────────────────────────────────────────────────
+    final xMs = allPoints.map((p) => p.time.millisecondsSinceEpoch);
+    _minX = xMs.reduce((a, b) => a < b ? a : b).toDouble();
+    _maxX = xMs.reduce((a, b) => a > b ? a : b).toDouble();
+    if (_maxX <= _minX) _maxX = _minX + 1;
 
-    final values = allPoints.map((p) => p.value);
-    final rawMinY = values.reduce((a, b) => a < b ? a : b);
-    final rawMaxY = values.reduce((a, b) => a > b ? a : b);
-    var loY = minY ?? rawMinY;
-    var hiY = maxY ?? rawMaxY;
+    // ── Y bounds ────────────────────────────────────────────────────────────
+    final vals = allPoints.map((p) => p.value);
+    final rawMin = vals.reduce((a, b) => a < b ? a : b);
+    final rawMax = vals.reduce((a, b) => a > b ? a : b);
+    var loY = widget.minY ?? rawMin;
+    var hiY = widget.maxY ?? rawMax;
     if (hiY <= loY) hiY = loY + 1;
-    if (minY == null || maxY == null) {
+    if (widget.minY == null || widget.maxY == null) {
       final pad = (hiY - loY) * 0.1;
-      if (maxY == null) hiY += pad;
-      if (minY == null) {
+      if (widget.maxY == null) hiY += pad;
+      if (widget.minY == null) {
         loY -= pad;
-        // Don't let a naturally non-negative series (watts, percent) dip
-        // below zero just because of padding.
-        if (rawMinY >= 0 && loY < 0) loY = 0;
+        if (rawMin >= 0 && loY < 0) loY = 0;
       }
     }
+    final midY = (loY + hiY) / 2;
 
-    final firstTime =
-        allPoints.map((p) => p.time).reduce((a, b) => a.isBefore(b) ? a : b);
-    final lastTime =
-        allPoints.map((p) => p.time).reduce((a, b) => a.isAfter(b) ? a : b);
+    // ── X-axis ticks (4 evenly-spaced labels) ───────────────────────────────
+    const tickCount = 4;
+    final xTicks = List.generate(tickCount, (i) {
+      final frac = i / (tickCount - 1);
+      return DateTime.fromMillisecondsSinceEpoch(
+          (_minX + frac * (_maxX - _minX)).round());
+    });
+
+    // ── Dot radius based on density ─────────────────────────────────────────
+    final totalPoints = allPoints.length;
+    final dotRadius = totalPoints <= 50
+        ? 3.5
+        : totalPoints <= 150
+            ? 2.5
+            : 1.5;
+
+    final yLabelW = widget.valueLabel != null ? 44.0 : 0.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (valueLabel != null)
+            // ── Y-axis labels ───────────────────────────────────────────────
+            if (widget.valueLabel != null)
               SizedBox(
-                width: 40,
-                height: height,
+                width: yLabelW,
+                height: widget.height,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(valueLabel!(hiY), style: AppTypography.labelSm),
-                    Text(valueLabel!(loY), style: AppTypography.labelSm),
+                    Text(widget.valueLabel!(hiY),
+                        style: AppTypography.labelSm),
+                    Text(widget.valueLabel!(midY),
+                        style: AppTypography.labelSm),
+                    Text(widget.valueLabel!(loY),
+                        style: AppTypography.labelSm),
                   ],
                 ),
               ),
+
+            // ── Plot area ───────────────────────────────────────────────────
             Expanded(
-              child: SizedBox(
-                height: height,
-                child: CustomPaint(
-                  painter: _TimeSeriesPainter(
-                    seriesList: series,
-                    minY: loY,
-                    maxY: hiY,
-                    minX: minX,
-                    maxX: maxX,
+              child: LayoutBuilder(builder: (ctx, constraints) {
+                final plotW = constraints.maxWidth;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (d) =>
+                      _handleTouch(d.localPosition.dx, plotW),
+                  onPanStart: (d) =>
+                      _handleTouch(d.localPosition.dx, plotW),
+                  onPanUpdate: (d) =>
+                      _handleTouch(d.localPosition.dx, plotW),
+                  child: SizedBox(
+                    height: widget.height,
+                    child: CustomPaint(
+                      painter: _TimeSeriesPainter(
+                        seriesList: widget.series,
+                        minY: loY,
+                        maxY: hiY,
+                        minX: _minX,
+                        maxX: _maxX,
+                        selectedTime: widget.selectedTime,
+                        dotRadius: dotRadius,
+                      ),
+                      size: Size(plotW, widget.height),
+                    ),
                   ),
-                ),
-              ),
+                );
+              }),
             ),
           ],
         ),
-        if (timeLabel != null) ...[
+
+        // ── X-axis labels ───────────────────────────────────────────────────
+        if (widget.timeLabel != null) ...[
           const SizedBox(height: AppSpacing.xs),
           Padding(
-            padding: const EdgeInsets.only(left: 48),
+            padding: EdgeInsets.only(left: yLabelW),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(timeLabel!(firstTime), style: AppTypography.labelSm),
-                Text(timeLabel!(lastTime), style: AppTypography.labelSm),
-              ],
+              children: xTicks
+                  .map((t) =>
+                      Text(widget.timeLabel!(t), style: AppTypography.labelSm))
+                  .toList(),
             ),
           ),
         ],
@@ -141,6 +214,8 @@ class TimeSeriesChart extends StatelessWidget {
   }
 }
 
+// ── Painter ───────────────────────────────────────────────────────────────────
+
 class _TimeSeriesPainter extends CustomPainter {
   _TimeSeriesPainter({
     required this.seriesList,
@@ -148,6 +223,8 @@ class _TimeSeriesPainter extends CustomPainter {
     required this.maxY,
     required this.minX,
     required this.maxX,
+    this.selectedTime,
+    this.dotRadius = 2.5,
   });
 
   final List<ChartSeries> seriesList;
@@ -155,70 +232,132 @@ class _TimeSeriesPainter extends CustomPainter {
   final double maxY;
   final double minX;
   final double maxX;
+  final DateTime? selectedTime;
+  final double dotRadius;
+
+  Offset _toOffset(ChartPoint p, Size size) {
+    final xFrac =
+        ((p.time.millisecondsSinceEpoch - minX) / (maxX - minX))
+            .clamp(0.0, 1.0);
+    final yFrac = ((p.value - minY) / (maxY - minY)).clamp(0.0, 1.0);
+    return Offset(xFrac * size.width, size.height - yFrac * size.height);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
+    // ── Grid (5 horizontal lines) ────────────────────────────────────────
     final gridPaint = Paint()
       ..color = AppColors.border
       ..strokeWidth = 1;
-    for (var i = 0; i <= 3; i++) {
-      final y = size.height * i / 3;
+    for (var i = 0; i <= 4; i++) {
+      final y = size.height * i / 4;
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    final xRange = (maxX - minX) <= 0 ? 1.0 : (maxX - minX);
-    final yRange = (maxY - minY) <= 0 ? 1.0 : (maxY - minY);
-
-    Offset toOffset(ChartPoint p) {
-      final xFrac = (p.time.millisecondsSinceEpoch - minX) / xRange;
-      final yFrac = (p.value - minY) / yRange;
-      return Offset(
-        xFrac.clamp(0.0, 1.0) * size.width,
-        size.height - yFrac.clamp(0.0, 1.0) * size.height,
-      );
-    }
-
+    // ── Fills ─────────────────────────────────────────────────────────────
     for (final s in seriesList) {
-      if (s.points.isEmpty) continue;
-      final offsets = s.points.map(toOffset).toList();
-
-      if (s.fillGradient) {
-        final fillPath = Path()..moveTo(offsets.first.dx, size.height);
-        for (final o in offsets) {
-          fillPath.lineTo(o.dx, o.dy);
-        }
-        fillPath
-          ..lineTo(offsets.last.dx, size.height)
-          ..close();
-        final fillPaint = Paint()
+      if (!s.fillGradient || s.points.isEmpty) continue;
+      final offsets = s.points.map((p) => _toOffset(p, size)).toList();
+      final path = Path()..moveTo(offsets.first.dx, size.height);
+      for (final o in offsets) path.lineTo(o.dx, o.dy);
+      path
+        ..lineTo(offsets.last.dx, size.height)
+        ..close();
+      canvas.drawPath(
+        path,
+        Paint()
           ..shader = LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [s.color.withOpacity(0.22), s.color.withOpacity(0.0)],
-          ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-        canvas.drawPath(fillPath, fillPaint);
-      }
+            colors: [s.color.withOpacity(0.2), Colors.transparent],
+          ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
+      );
+    }
 
-      final linePath = Path()..moveTo(offsets.first.dx, offsets.first.dy);
-      for (final o in offsets.skip(1)) {
-        linePath.lineTo(o.dx, o.dy);
-      }
-      final linePaint = Paint()
+    // ── Lines ──────────────────────────────────────────────────────────────
+    for (final s in seriesList) {
+      if (s.points.isEmpty) continue;
+      final offsets = s.points.map((p) => _toOffset(p, size)).toList();
+      final path = Path()..moveTo(offsets.first.dx, offsets.first.dy);
+      for (final o in offsets.skip(1)) path.lineTo(o.dx, o.dy);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = s.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+
+    // ── Data-point dots ────────────────────────────────────────────────────
+    for (final s in seriesList) {
+      if (s.points.isEmpty) continue;
+      final offsets = s.points.map((p) => _toOffset(p, size)).toList();
+      // Background ring so dots pop off the fill.
+      final bgPaint = Paint()
+        ..color = AppColors.surface
+        ..style = PaintingStyle.fill;
+      final dotPaint = Paint()
         ..color = s.color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
-      canvas.drawPath(linePath, linePaint);
+        ..style = PaintingStyle.fill;
+      for (final o in offsets) {
+        canvas.drawCircle(o, dotRadius + 1.0, bgPaint);
+        canvas.drawCircle(o, dotRadius, dotPaint);
+      }
+    }
+
+    // ── Crosshair ──────────────────────────────────────────────────────────
+    final sel = selectedTime;
+    if (sel == null) return;
+
+    final selMs = sel.millisecondsSinceEpoch.toDouble();
+    final xFrac = ((selMs - minX) / (maxX - minX)).clamp(0.0, 1.0);
+    final selX = xFrac * size.width;
+
+    // Vertical rule
+    canvas.drawLine(
+      Offset(selX, 0),
+      Offset(selX, size.height),
+      Paint()
+        ..color = AppColors.textSecondary.withOpacity(0.35)
+        ..strokeWidth = 1,
+    );
+
+    // Snap to nearest point per series → highlighted dot
+    for (final s in seriesList) {
+      if (s.points.isEmpty) continue;
+      ChartPoint? nearest;
+      double? minDist;
+      for (final pt in s.points) {
+        final d = (pt.time.millisecondsSinceEpoch - selMs).abs().toDouble();
+        if (minDist == null || d < minDist) {
+          minDist = d;
+          nearest = pt;
+        }
+      }
+      if (nearest == null) continue;
+      final o = _toOffset(nearest, size);
+      // Halo
+      canvas.drawCircle(
+          o, 9, Paint()..color = s.color.withOpacity(0.18)..style = PaintingStyle.fill);
+      // Ring
+      canvas.drawCircle(
+          o, 5.5, Paint()..color = s.color.withOpacity(0.4)..style = PaintingStyle.fill);
+      // Core
+      canvas.drawCircle(
+          o, 3.5, Paint()..color = s.color..style = PaintingStyle.fill);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _TimeSeriesPainter oldDelegate) {
-    return oldDelegate.seriesList != seriesList ||
-        oldDelegate.minY != minY ||
-        oldDelegate.maxY != maxY ||
-        oldDelegate.minX != minX ||
-        oldDelegate.maxX != maxX;
-  }
+  bool shouldRepaint(covariant _TimeSeriesPainter old) =>
+      old.selectedTime != selectedTime ||
+      old.minX != minX ||
+      old.maxX != maxX ||
+      old.minY != minY ||
+      old.maxY != maxY ||
+      old.dotRadius != dotRadius ||
+      old.seriesList != seriesList;
 }
