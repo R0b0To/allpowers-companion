@@ -73,35 +73,45 @@ final class AutomationEngine {
   ///
   /// Called on every BLE status update. Returns early if automation is
   /// disabled, outside the time window, or a sequence is already running.
-  Future<void> evaluate(AutomationSettings settings) async {
-    if (!_initialized || !settings.enabled) return;
-    if (!settings.isTimeInWindow(TimeOfDay.now())) return;
+Future<void> evaluate(AutomationSettings settings) async {
+  if (!_initialized || !settings.enabled) return;
 
-    final level = _ble.status.batteryLevel;
-    if (level <= 0) return; // Bogus reading — ignore.
+  final level = _ble.status.batteryLevel;
+  if (level <= 0) return;
 
-    // Re-arm the high-threshold stop guard once level drops back below limit.
-    if (level < settings.highThreshold) {
-      _fullyChargedHandled = false;
-    }
+  final inWindow = settings.isTimeInWindow(TimeOfDay.now());
 
-    // ── Low threshold: start charging ────────────────────────────────────────
+  // Re-arm high-threshold guard when level drops back below limit.
+  if (level < settings.highThreshold) {
+    _fullyChargedHandled = false;
+  }
+
+  if (inWindow) {
+    // ── Normal window logic ──────────────────────────────────────────────
     if (level <= settings.lowThreshold &&
         !_chargingTriggered &&
         !_sequenceRunning) {
       await _runLowBatterySequence(settings);
-      return; // Don't also evaluate high-threshold in the same tick.
+      return;
     }
 
-    // ── High threshold: stop charging ────────────────────────────────────────
-    // Intentionally NOT gated on _chargingTriggered so the charger is always
-    // stopped at the limit, even if this session never saw it cross the low
-    // threshold (manual plug-in, app restart mid-cycle, etc).
     if (level >= settings.highThreshold && !_fullyChargedHandled) {
       _fullyChargedHandled = true;
       await _runFullyChargedSequence(settings);
     }
+  } else {
+  // ── Outside window: ensure plug is on, never touch it ───────────────
+  // Battery charges freely outside the window; sockets draw from the
+  // charger directly. Only start charging if not already triggered.
+  if (!_chargingTriggered && !_sequenceRunning) {
+    Log.i('AutomationEngine',
+        'Outside window — ensuring plug is ON at $level%');
+    await _runLowBatterySequence(settings);
   }
+  // No high-threshold stop outside the window — the window start (9pm)
+  // will handle stopping when the cycle begins.
+}
+}
 
   // ── Low battery sequence ───────────────────────────────────────────────────
 
