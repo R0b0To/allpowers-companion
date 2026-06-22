@@ -53,32 +53,32 @@ class _MainShellState extends State<MainShell> {
     _ble = BleService(_storage);
     _automation = AutomationEngine(_ble, _webhooks, _tapo, _storage, _history);
 
-    _ble.onStatus = (status) {
-      _notifications.handleBatteryLevel(status.batteryLevel);
-      _automation.evaluate(_settings);
-      _energyLog.recordSample(status);
-    };
-
     // Defer bootstrap until the first frame so the widget tree is ready.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
   Future<void> _bootstrap() async {
-    await _notifications.init();
-    await _requestPermissions();
+  await _notifications.init();
+  await _requestPermissions();
 
-    final settings = await _storage.loadAutomationSettings();
-    if (!mounted) return;
-    setState(() {
-      _settings = settings;
-      _bootstrapped = true;
-    });
+  final settings = await _storage.loadAutomationSettings();
+  if (!mounted) return;
+  setState(() {
+    _settings = settings;
+    _bootstrapped = true;
+  });
 
-    await _history.init();
-    await _energyLog.init();
-    await _automation.init();
-    await _ble.init();
-  }
+    _ble.onStatus = (status) {
+    _notifications.handleBatteryLevel(status.batteryLevel);
+    _automation.evaluate(_settings);
+    _energyLog.recordSample(status);
+  };
+
+  await _history.init();
+  await _energyLog.init();
+  await _automation.init();
+  await _ble.init();
+}
 
   Future<void> _requestPermissions() async {
     final statuses = await [
