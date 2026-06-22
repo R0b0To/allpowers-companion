@@ -100,16 +100,28 @@ Future<void> evaluate(AutomationSettings settings) async {
       await _runFullyChargedSequence(settings);
     }
   } else {
-  // ── Outside window: ensure plug is on, never touch it ───────────────
-  // Battery charges freely outside the window; sockets draw from the
-  // charger directly. Only start charging if not already triggered.
+  // ── Outside window: ensure plug is on ───────────────────────────────
   if (!_chargingTriggered && !_sequenceRunning) {
-    Log.i('AutomationEngine',
-        'Outside window — ensuring plug is ON at $level%');
-    await _runLowBatterySequence(settings);
+    // Check actual plug state before triggering the full sequence.
+    final alreadyOn = settings.hasLocalTapoCredentials
+        ? await _tapo.isOn(
+            ip: settings.tapoIp,
+            email: settings.tapoEmail,
+            password: settings.tapoPassword,
+          )
+        : null; // webhook path — can't query state, assume needs triggering
+
+    if (alreadyOn == true) {
+      // Plug is already on — just sync our flag and do nothing.
+      Log.i('AutomationEngine', 'Outside window — plug already ON, syncing flag');
+      _chargingTriggered = true;
+      await _storage.setChargingTriggered(true);
+    } else {
+      // Plug is off or unknown — turn it on.
+      Log.i('AutomationEngine', 'Outside window — plug is OFF, starting charge');
+      await _runLowBatterySequence(settings);
+    }
   }
-  // No high-threshold stop outside the window — the window start (9pm)
-  // will handle stopping when the cycle begins.
 }
 }
 

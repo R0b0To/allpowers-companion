@@ -73,6 +73,22 @@ final class TapoService {
     }
   }
 
+  /// Returns the current on/off state of the plug, or null on any error.
+Future<bool?> isOn({
+  required String ip,
+  required String email,
+  required String password,
+}) async {
+  final session = _getOrCreateSession(ip, email, password);
+  try {
+    final info = await session.getDeviceInfo();
+    return info['device_on'] as bool?;
+  } catch (e) {
+    Log.e('TapoService', 'isOn check failed', e);
+    return null; // null = unknown, caller decides how to handle
+  }
+}
+
   /// Sets the on/off state of the smart plug.
   ///
   /// Returns true on success. On failure, the session is reset so the next
