@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -6,6 +8,7 @@ import '../models/automation_settings.dart';
 import '../services/automation_engine.dart';
 import '../services/ble_service.dart';
 import '../services/energy_log_service.dart';
+import '../services/foreground_service.dart';
 import '../services/history_service.dart';
 import '../services/notification_service.dart';
 import '../services/storage_service.dart';
@@ -19,9 +22,16 @@ import 'history_tab.dart';
 
 /// Root shell: owns all service singletons and hosts the bottom navigation.
 ///
-/// Neither tab constructs services — they receive them as constructor
-/// parameters, keeping tabs independently testable and free of hidden
-/// dependencies.
+/// ## Background execution
+/// After bootstrap completes, [ForegroundService.start] promotes the process
+/// to an Android foreground service so it survives screen-off, app switch,
+/// and device reboot. All BLE callbacks and the automation engine continue
+/// running on the main isolate — the foreground service is a thin shell
+/// whose only job is to prevent the OS from killing the process.
+///
+/// On iOS the foreground service is a no-op; background BLE continuity is
+/// handled instead by the `bluetooth-central` background mode declared in
+/// Info.plist.
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -52,40 +62,75 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     _ble = BleService(_storage);
     _automation = AutomationEngine(_ble, _webhooks, _tapo, _storage, _history);
-
-    // Defer bootstrap until the first frame so the widget tree is ready.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
-  Future<void> _bootstrap() async {
-  await _notifications.init();
-  await _requestPermissions();
+  // ── Bootstrap ──────────────────────────────────────────────────────────────
 
-  final settings = await _storage.loadAutomationSettings();
-  if (!mounted) return;
-  setState(() {
-    _settings = settings;
-    _bootstrapped = true;
-  });
+  Future<void> _bootstrap() async {
+    await _notifications.init();
+    await _requestPermissions();
+
+    // Start the foreground service early so that even if the user background
+    // the app during the rest of bootstrap, the process stays alive.
+    await ForegroundService.start();
+
+    // One-time prompt to exempt from battery optimisation (Samsung / Xiaomi /
+    // Huawei OEM battery savers can suspend foreground services without this).
+    await ForegroundService.requestBatteryOptimizationExemption();
+
+    final settings = await _storage.loadAutomationSettings();
+    if (!mounted) return;
+    setState(() {
+      _settings = settings;
+      _bootstrapped = true;
+    });
+
+    // Keep the foreground notification in sync with connection state changes.
+    _ble.addListener(_onBleStateChanged);
 
     _ble.onStatus = (status) {
-    _notifications.handleBatteryLevel(status.batteryLevel);
-    _automation.evaluate(_settings);
-    _energyLog.recordSample(status);
-  };
+      _notifications.handleBatteryLevel(status.batteryLevel);
+      _automation.evaluate(_settings);
+      _energyLog.recordSample(status);
+      // Update notification text with live battery / wattage data.
+      ForegroundService.updateStatus(connected: true, status: status);
+    };
 
-  await _history.init();
-  await _energyLog.init();
-  await _automation.init();
-  await _ble.init();
-}
+    await _history.init();
+    await _energyLog.init();
+    await _automation.init();
+    await _ble.init();
+  }
+
+  // ── BLE state listener ─────────────────────────────────────────────────────
+
+  /// Called by [BleService] (ChangeNotifier) on every state change:
+  /// scanning start/stop, connect, disconnect, characteristic discovery…
+  ///
+  /// We use this to keep the foreground notification accurate even when
+  /// no status packets are arriving (e.g. while scanning or disconnected).
+  void _onBleStateChanged() {
+    ForegroundService.updateStatus(
+      connected: _ble.isConnected,
+      status: _ble.isConnected ? _ble.status : null,
+    );
+  }
+
+  // ── Permissions ────────────────────────────────────────────────────────────
 
   Future<void> _requestPermissions() async {
-    final statuses = await [
+    final permissions = [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.location,
-    ].request();
+      // POST_NOTIFICATIONS: required on Android 13+ for any notification
+      // (including the foreground service notification).
+      // Gracefully granted / ignored on older Android and iOS.
+      if (Platform.isAndroid) Permission.notification,
+    ];
+
+    final statuses = await permissions.request();
 
     if (!mounted) return;
     setState(() {
@@ -94,18 +139,28 @@ class _MainShellState extends State<MainShell> {
     });
   }
 
+  // ── Settings ───────────────────────────────────────────────────────────────
+
   Future<void> _onSettingsChanged(AutomationSettings updated) async {
     setState(() => _settings = updated);
     await _storage.saveAutomationSettings(updated);
   }
 
+  // ── Dispose ────────────────────────────────────────────────────────────────
+
   @override
   void dispose() {
+    // Remove listener before disposing BLE service to avoid callbacks on a
+    // dead widget. The foreground service itself is NOT stopped here — it
+    // should continue running after the widget tree is torn down.
+    _ble.removeListener(_onBleStateChanged);
     _ble.dispose();
     _history.dispose();
     _energyLog.dispose();
     super.dispose();
   }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -149,11 +204,13 @@ class _MainShellState extends State<MainShell> {
       ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: AppColors.border, width: 1)),
+          border:
+              Border(top: BorderSide(color: AppColors.border, width: 1)),
         ),
         child: NavigationBar(
           selectedIndex: _selectedIndex,
-          onDestinationSelected: (i) => setState(() => _selectedIndex = i),
+          onDestinationSelected: (i) =>
+              setState(() => _selectedIndex = i),
           destinations: [
             NavigationDestination(
               icon: const Icon(Icons.bolt_outlined),

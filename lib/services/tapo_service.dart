@@ -10,25 +10,6 @@ import 'package:pointycastle/export.dart';
 import '../utils/logger.dart';
 
 /// Controls a TP-Link Tapo smart plug via the local KLAP protocol.
-///
-/// ## Security
-/// - Credentials are never logged (not even partially). See inline comments.
-/// - The session key, IV, and signature prefix are never logged — they are
-///   live encryption material for an active session.
-/// - On any error, the session is reset to force a clean re-handshake.
-///
-/// ## Session management
-/// Sessions are keyed by `"ip:email"` and reused across calls. Call
-/// [resetSession] if you need to force a fresh handshake (e.g. after a
-/// settings change or before an automation action — the Tapo device resets
-/// its own session state when power-cycled, so the app's cached cookie
-/// becomes stale and causes timeouts rather than clean errors).
-///
-/// ## Retry behaviour
-/// [setOn] and [isOn] each retry once on failure. After any failed request
-/// [_TapoSession._request] already clears the session, so the retry always
-/// performs a fresh handshake. A 2 s back-off between attempts gives the
-/// plug time to settle after a reboot or network blip.
 final class TapoService {
   final HttpClient _httpClient = HttpClient();
   final Map<String, _TapoSession> _sessions = {};
@@ -43,7 +24,6 @@ final class TapoService {
     );
   }
 
-  /// Strips protocol prefix and trailing slash from an IP/hostname string.
   static String _normalizeIp(String ip) {
     var clean = ip.trim();
     if (clean.startsWith('https://')) clean = clean.substring(8);
@@ -52,29 +32,17 @@ final class TapoService {
     return clean;
   }
 
-  /// Clears any cached session for the given credentials, forcing a fresh
-  /// KLAP handshake on the next call.
-  ///
-  /// Call this:
-  /// - After credential changes in Settings.
-  /// - Before each automation plug action ([AutomationEngine] does this) to
-  ///   avoid stale-cookie timeouts when the plug was power-cycled during the
-  ///   low-battery sequence.
   void resetSession({required String ip, required String email}) {
     _sessions.remove('${_normalizeIp(ip)}:$email');
   }
 
-  /// Tests connectivity and returns a human-readable result string.
-  ///
-  /// Forces a fresh handshake so this always reflects the current state
-  /// of the plug and credentials.
   Future<String> test({
     required String ip,
     required String email,
     required String password,
   }) async {
     final session = _getOrCreateSession(ip, email, password);
-    session.reset(); // Fresh handshake for accurate test.
+    session.reset();
 
     try {
       final info = await session.getDeviceInfo();
@@ -88,10 +56,6 @@ final class TapoService {
     }
   }
 
-  /// Returns the current on/off state of the plug, or null on any error.
-  ///
-  /// Retries once on failure (with a fresh handshake) to handle stale
-  /// sessions and transient network blips.
   Future<bool?> isOn({
     required String ip,
     required String email,
@@ -102,7 +66,6 @@ final class TapoService {
       final info = await session.getDeviceInfo();
       return info['device_on'] as bool?;
     } catch (e) {
-      // Session was auto-reset by _request(). Retry once with a fresh handshake.
       Log.w('TapoService', 'isOn attempt 1 failed, retrying in 2 s — $e');
       await Future<void>.delayed(const Duration(seconds: 2));
       try {
@@ -115,12 +78,6 @@ final class TapoService {
     }
   }
 
-  /// Sets the on/off state of the smart plug.
-  ///
-  /// Returns true on success. Retries once on failure (with a fresh
-  /// handshake) to handle stale KLAP sessions — most commonly triggered
-  /// when the plug is power-cycled during the ON sequence and the app's
-  /// cached session cookie becomes invalid.
   Future<bool> setOn({
     required String ip,
     required String email,
@@ -134,9 +91,6 @@ final class TapoService {
       Log.i('TapoService', 'Plug set to $action');
       return true;
     } catch (e) {
-      // _request() already reset the session on failure, so the retry will
-      // perform a clean re-handshake. A 2 s delay lets the plug settle after
-      // a reboot or network interruption.
       Log.w('TapoService', 'setOn $action attempt 1 failed, retrying in 2 s — $e');
       await Future<void>.delayed(const Duration(seconds: 2));
       try {
@@ -190,7 +144,6 @@ final class _TapoSession {
   final String password;
   final HttpClient client;
 
-  // KLAP session state — intentionally never logged anywhere in this file.
   Uint8List? _key;
   Uint8List? _iv;
   int _seq = 0;
@@ -206,8 +159,6 @@ final class _TapoSession {
   }
 
   bool get _isInitialized => _key != null;
-
-  // ── Crypto helpers ──────────────────────────────────────────────────────────
 
   Uint8List _sha1(List<int> bytes) =>
       Uint8List.fromList(crypto.sha1.convert(bytes).bytes);
@@ -238,12 +189,13 @@ final class _TapoSession {
     return true;
   }
 
+  // Corrected: Uses toUnsigned(32) to prevent negative sequence numbers
   int _int32BigEndian(Uint8List bytes) {
     return ((bytes[0] << 24) |
             (bytes[1] << 16) |
             (bytes[2] << 8) |
             bytes[3])
-        .toSigned(32);
+        .toUnsigned(32);
   }
 
   Uint8List _toInt32BigEndian(int value) => Uint8List(4)
@@ -259,11 +211,17 @@ final class _TapoSession {
       ..fillRange(data.length, data.length + padLen, padLen);
   }
 
+  // Corrected: Added rigorous byte checks to unpad logic
   Uint8List _pkcs7Unpad(Uint8List data) {
     if (data.isEmpty) throw StateError('Cannot unpad empty data');
     final padLen = data.last;
-    if (padLen < 1 || padLen > 16) {
-      throw StateError('Invalid PKCS#7 padding byte: $padLen');
+    if (padLen < 1 || padLen > 16 || padLen > data.length) {
+      throw StateError('Invalid PKCS#7 padding byte length: $padLen');
+    }
+    for (var i = data.length - padLen; i < data.length; i++) {
+      if (data[i] != padLen) {
+        throw StateError('PKCS#7 padding values mismatch');
+      }
     }
     return data.sublist(0, data.length - padLen);
   }
@@ -292,8 +250,6 @@ final class _TapoSession {
     return out;
   }
 
-  // ── HTTP transport ──────────────────────────────────────────────────────────
-
   Future<Uint8List> _post(
     String path,
     Uint8List body, {
@@ -308,7 +264,6 @@ final class _TapoSession {
     final request =
         await client.postUrl(uri).timeout(const Duration(seconds: 6));
 
-    // TP-Link KLAP firmware is strict about header casing.
     request.headers
       ..add('Host', uri.host, preserveHeaderCase: true)
       ..add('User-Agent', 'python-requests/2.28.1',
@@ -338,7 +293,6 @@ final class _TapoSession {
     final responseBytes =
         await _readResponse(response).timeout(const Duration(seconds: 8));
 
-    // Extract session cookie (never logged — it's a live credential).
     final setCookie = response.headers.value('set-cookie');
     if (setCookie != null) {
       final idx = setCookie.indexOf(';');
@@ -356,8 +310,6 @@ final class _TapoSession {
     return builder.takeBytes();
   }
 
-  // ── KLAP handshake ──────────────────────────────────────────────────────────
-
   Future<void> _initialize() async {
     final localSeed = _randomBytes(16);
     final hs1Response = await _post('handshake1', localSeed);
@@ -370,7 +322,6 @@ final class _TapoSession {
     final remoteSeed = hs1Response.sublist(0, 16);
     final serverHash = hs1Response.sublist(16, 48);
 
-    // Try credentials in order: provided, blank, and a known factory default.
     final candidates = [
       [email, password],
       ['', ''],
@@ -430,10 +381,9 @@ final class _TapoSession {
     );
   }
 
-  // ── Request encryption ──────────────────────────────────────────────────────
-
   Uint8List _encrypt(Uint8List plaintext) {
-    _seq++;
+    // Corrected: Wrap around toUnsigned(32) so the string counter in HTTP never has a minus sign
+    _seq = (_seq + 1).toUnsigned(32);
     final seqBytes = _toInt32BigEndian(_seq);
     final aesIv = Uint8List(_iv!.length + seqBytes.length)
       ..setAll(0, _iv!)
@@ -456,6 +406,11 @@ final class _TapoSession {
   }
 
   Uint8List _decrypt(Uint8List responseBytes) {
+    // Corrected: Prevents sublist RangeError crash if payload from plug is short or corrupted
+    if (responseBytes.length < 32) {
+      throw StateError(
+          'Response too short (${responseBytes.length} bytes, expected ≥ 32)');
+    }
     final seqBytes = _toInt32BigEndian(_seq);
     final aesIv = Uint8List(_iv!.length + seqBytes.length)
       ..setAll(0, _iv!)
@@ -465,8 +420,6 @@ final class _TapoSession {
       _aesCbcDecrypt(_key!, aesIv, responseBytes.sublist(32)),
     );
   }
-
-  // ── High-level request ──────────────────────────────────────────────────────
 
   Future<dynamic> _request(String method,
       [Map<String, dynamic>? params]) async {

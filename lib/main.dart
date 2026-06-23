@@ -1,15 +1,20 @@
+import 'package:ap_companion/automation_test_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-
 import 'screens/main_shell.dart';
+import 'services/foreground_service.dart';
 import 'theme/app_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Edge-to-edge rendering — content draws behind the system bars and we
-  // colour them ourselves in AppTheme.applySystemOverlay().
+  // Must be called before runApp — registers the inter-isolate communication
+  // port that flutter_foreground_task needs to relay messages between the
+  // service isolate and the UI isolate.
+  ForegroundService.initCommunicationPort();
+
+  // Edge-to-edge rendering.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   AppTheme.applySystemOverlay();
 
@@ -35,9 +40,10 @@ class ApCompanionApp extends StatelessWidget {
         for (final supported in supportedLocales) {
           if (supported.languageCode == locale?.languageCode) return supported;
         }
-        return supportedLocales.first; // Default to English.
+        return supportedLocales.first;
       },
       home: const MainShell(),
+      //home: const AutomationTestScreen(),
     );
   }
 }

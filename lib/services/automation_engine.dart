@@ -10,37 +10,6 @@ import 'tapo_service.dart';
 import 'webhook_service.dart';
 
 /// Implements the "smart charging" automation loop.
-///
-/// ## What it does
-/// - **Low threshold → start charging**: Cut AC outlets briefly, activate the
-///   smart plug (local Tapo preferred, webhook fallback), wait for the charger
-///   to power up, then restore AC.
-/// - **High threshold → stop charging**: Turn off the smart plug (same
-///   priority order) and reset the charging-triggered flag.
-///
-/// ## Reconnect-safe design
-/// [_chargingTriggered] is persisted to [StorageService]. If the station
-/// disconnects mid-charge and reconnects at a slightly higher level, the
-/// engine will not re-fire the low-battery sequence because the flag
-/// survives restarts. It is only cleared when the high threshold is reached.
-///
-/// ## Deduplication
-/// - [_chargingTriggered] deduplicates the low-threshold action.
-/// - [_fullyChargedHandled] deduplicates the high-threshold action within
-///   a single app session. It re-arms when the level drops back below the
-///   threshold so the next full cycle can fire again. Intentionally NOT
-///   persisted — the stop-charging action should always fire after the app
-///   is restarted mid-cycle if the level is already at the high threshold.
-/// - [_sequenceRunning] prevents overlapping low-battery sequences if BLE
-///   packets arrive faster than the sequence completes (which includes
-///   deliberate 5 s + 10 s delays).
-///
-/// ## History
-/// Every attempted ON/OFF action — whether it succeeds, fails, or has
-/// nothing configured to run — is logged to [HistoryService] with the
-/// battery level that triggered it, captured at the *start* of the sequence
-/// (before any of the multi-second delays below) so it reflects the reading
-/// the user actually saw cross the threshold.
 final class AutomationEngine {
   AutomationEngine(
     this._ble,
@@ -61,8 +30,7 @@ final class AutomationEngine {
   bool _sequenceRunning = false;
   bool _initialized = false;
 
-  /// Must be called once before [evaluate] to restore the persisted
-  /// [_chargingTriggered] flag from disk.
+  /// Must be called once before [evaluate] to restore the persisted state.
   Future<void> init() async {
     _chargingTriggered = await _storage.getChargingTriggered();
     _initialized = true;
@@ -70,9 +38,6 @@ final class AutomationEngine {
   }
 
   /// Evaluates the current battery level against the automation rules.
-  ///
-  /// Called on every BLE status update. Returns early if automation is
-  /// disabled, outside the time window, or a sequence is already running.
   Future<void> evaluate(AutomationSettings settings) async {
     if (!_initialized || !settings.enabled) return;
 
@@ -95,31 +60,40 @@ final class AutomationEngine {
         return;
       }
 
-      if (level >= settings.highThreshold && !_fullyChargedHandled) {
-        _fullyChargedHandled = true;
+      if (level >= settings.highThreshold && !_fullyChargedHandled && !_sequenceRunning) {
         await _runFullyChargedSequence(settings);
       }
     } else {
       // ── Outside window: ensure plug is on ───────────────────────────────
       if (!_chargingTriggered && !_sequenceRunning) {
-        // Check actual plug state before triggering the full sequence.
-        final alreadyOn = settings.hasLocalTapoCredentials
-            ? await _tapo.isOn(
-                ip: settings.tapoIp,
-                email: settings.tapoEmail,
-                password: settings.tapoPassword,
-              )
-            : null; // webhook path — can't query state, assume needs triggering
+        _sequenceRunning = true; // Guard against overlapping evaluations
+        try {
+          // Clear any stale session before checking the state
+          if (settings.hasLocalTapoCredentials) {
+            _tapo.resetSession(ip: settings.tapoIp, email: settings.tapoEmail);
+          }
 
-        if (alreadyOn == true) {
-          // Plug is already on — just sync our flag and do nothing.
-          Log.i('AutomationEngine', 'Outside window — plug already ON, syncing flag');
-          _chargingTriggered = true;
-          await _storage.setChargingTriggered(true);
-        } else {
-          // Plug is off or unknown — turn it on.
-          Log.i('AutomationEngine', 'Outside window — plug is OFF, starting charge');
-          await _runLowBatterySequence(settings);
+          final alreadyOn = settings.hasLocalTapoCredentials
+              ? await _tapo.isOn(
+                  ip: settings.tapoIp,
+                  email: settings.tapoEmail,
+                  password: settings.tapoPassword,
+                )
+              : null; // webhooks can't query state, assume needs triggering
+
+          if (alreadyOn == true) {
+            Log.i('AutomationEngine', 'Outside window — plug already ON, syncing flag');
+            _chargingTriggered = true;
+            await _storage.setChargingTriggered(true);
+          } else {
+            Log.i('AutomationEngine', 'Outside window — plug is OFF, starting charge');
+            _sequenceRunning = false; // Reset so sequence can manage lifecycle
+            await _runLowBatterySequence(settings);
+          }
+        } catch (e) {
+          Log.e('AutomationEngine', 'Error checking plug state outside window', e);
+        } finally {
+          _sequenceRunning = false;
         }
       }
     }
@@ -129,13 +103,8 @@ final class AutomationEngine {
 
   Future<void> _runLowBatterySequence(AutomationSettings settings) async {
     _sequenceRunning = true;
-
-    // Captured up front — this is the reading that actually triggered the
-    // sequence, not whatever the level drifts to during the delays below.
     final triggerLevel = _ble.status.batteryLevel;
 
-    // Persist flag before any async work so a crash or disconnect mid-sequence
-    // does not retrigger on reconnect.
     _chargingTriggered = true;
     await _storage.setChargingTriggered(true);
     Log.i('AutomationEngine', 'Low threshold reached — starting charge sequence');
@@ -160,6 +129,14 @@ final class AutomationEngine {
         method: method,
       ));
 
+      if (!success) {
+        // Recover: Reset flags so the engine will retry on the next evaluation.
+        _chargingTriggered = false;
+        await _storage.setChargingTriggered(false);
+        Log.w('AutomationEngine', 'Low-battery sequence failed to activate plug. Retrying on next update.');
+        return;
+      }
+
       // Step 4: Give the charger time to complete its power-delivery handshake.
       await Future<void>.delayed(const Duration(seconds: 10));
 
@@ -169,7 +146,9 @@ final class AutomationEngine {
         Log.d('AutomationEngine', 'AC outlets restored');
       }
     } catch (e) {
-      Log.e('AutomationEngine', 'Error in low-battery sequence', e);
+      Log.e('AutomationEngine', 'Critical error in low-battery sequence', e);
+      _chargingTriggered = false;
+      await _storage.setChargingTriggered(false);
     } finally {
       _sequenceRunning = false;
     }
@@ -178,28 +157,46 @@ final class AutomationEngine {
   // ── Fully charged sequence ─────────────────────────────────────────────────
 
   Future<void> _runFullyChargedSequence(AutomationSettings settings) async {
+    _sequenceRunning = true;
     Log.i('AutomationEngine', 'High threshold reached — stopping charge');
 
     final triggerLevel = _ble.status.batteryLevel;
 
-    // Reset persisted flag first so even if deactivation fails the engine
-    // won't be stuck in "charging" state forever.
     _chargingTriggered = false;
     await _storage.setChargingTriggered(false);
 
-    // Ensure AC is on (it should be, but guard against edge cases).
-    if (!_ble.status.isAcOn) {
-      await _ble.setAc(true);
-    }
+    try {
+      // Ensure AC is on (it should be, but guard against edge cases).
+      if (!_ble.status.isAcOn) {
+        await _ble.setAc(true);
+      }
 
-    final (success, method) = await _activatePlug(settings, on: false);
-    await _history.addEntry(AutomationHistoryEntry(
-      timestamp: DateTime.now(),
-      action: HistoryAction.turnOff,
-      batteryLevel: triggerLevel,
-      success: success,
-      method: method,
-    ));
+      final (success, method) = await _activatePlug(settings, on: false);
+      await _history.addEntry(AutomationHistoryEntry(
+        timestamp: DateTime.now(),
+        action: HistoryAction.turnOff,
+        batteryLevel: triggerLevel,
+        success: success,
+        method: method,
+      ));
+
+      if (success) {
+        _fullyChargedHandled = true;
+      } else {
+        // Recover: Revert flags on failure so it can re-attempt on the next update.
+        _chargingTriggered = true;
+        await _storage.setChargingTriggered(true);
+        _fullyChargedHandled = false;
+        Log.w('AutomationEngine', 'Failed to deactivate plug. Retrying on next update.');
+      }
+    } catch (e) {
+      Log.e('AutomationEngine', 'Critical error in fully charged sequence', e);
+      _chargingTriggered = true;
+      await _storage.setChargingTriggered(true);
+      _fullyChargedHandled = false;
+    } finally {
+      _sequenceRunning = false;
+    }
   }
 
   // ── Shared plug control with fallback ─────────────────────────────────────
@@ -211,6 +208,8 @@ final class AutomationEngine {
     final action = on ? 'ON' : 'OFF';
 
     if (settings.hasLocalTapoCredentials) {
+      // Corrected: Clear cached session before state changes as intended.
+      _tapo.resetSession(ip: settings.tapoIp, email: settings.tapoEmail);
       Log.d('AutomationEngine', 'Attempting local Tapo $action');
       final success = await _tapo.setOn(
         ip: settings.tapoIp,
@@ -228,13 +227,18 @@ final class AutomationEngine {
     final webhookUrl = on ? settings.tapoOnUrl : settings.tapoOffUrl;
     if (webhookUrl.isNotEmpty) {
       Log.d('AutomationEngine', 'Firing $action webhook');
-      final success = await _webhooks.fire(webhookUrl);
-      if (success) {
-        Log.i('AutomationEngine', '$action webhook succeeded');
-      } else {
-        Log.w('AutomationEngine', '$action webhook failed');
+      try {
+        final success = await _webhooks.fire(webhookUrl);
+        if (success) {
+          Log.i('AutomationEngine', '$action webhook succeeded');
+        } else {
+          Log.w('AutomationEngine', '$action webhook failed');
+        }
+        return (success, ActivationMethod.webhook);
+      } catch (e) {
+        Log.e('AutomationEngine', '$action webhook thrown exception', e);
+        return (false, ActivationMethod.webhook);
       }
-      return (success, ActivationMethod.webhook);
     }
 
     Log.w('AutomationEngine', 'No $action action configured');
@@ -243,32 +247,14 @@ final class AutomationEngine {
 
   // ── Debug accessors (AutomationTestScreen only) ───────────────────────────
 
-  /// Whether the engine has been initialised via [init].
   bool get debugInitialized => _initialized;
-
-  /// Whether the low-battery sequence has been triggered and the engine is
-  /// waiting for the high threshold to be reached before it can fire again.
-  /// If this is unexpectedly `true` at the start of a test run, call
-  /// [debugResetState] to clear it.
   bool get debugChargingTriggered => _chargingTriggered;
-
-  /// Whether a multi-step sequence (low or high threshold) is currently in
-  /// progress.  Evaluate calls are silently ignored while this is `true`.
   bool get debugSequenceRunning => _sequenceRunning;
-
-  /// Whether the high-threshold action has already fired this session.
   bool get debugFullyChargedHandled => _fullyChargedHandled;
 
-  /// Clears all in-memory and persisted automation state flags.
-  ///
-  /// **Test screen use only** — do not call in production paths.
-  /// Note: cannot interrupt an already-running async sequence; call this
-  /// before starting a new simulation run.
   Future<void> debugResetState() async {
     _chargingTriggered = false;
     _fullyChargedHandled = false;
-    // _sequenceRunning intentionally not forced to false — cannot cancel an
-    // in-flight async sequence.
     await _storage.setChargingTriggered(false);
     Log.i('AutomationEngine', 'debug: state reset by test screen');
   }
