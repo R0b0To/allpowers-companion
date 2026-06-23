@@ -20,7 +20,15 @@ import '../utils/logger.dart';
 /// ## Session management
 /// Sessions are keyed by `"ip:email"` and reused across calls. Call
 /// [resetSession] if you need to force a fresh handshake (e.g. after a
-/// settings change).
+/// settings change or before an automation action — the Tapo device resets
+/// its own session state when power-cycled, so the app's cached cookie
+/// becomes stale and causes timeouts rather than clean errors).
+///
+/// ## Retry behaviour
+/// [setOn] and [isOn] each retry once on failure. After any failed request
+/// [_TapoSession._request] already clears the session, so the retry always
+/// performs a fresh handshake. A 2 s back-off between attempts gives the
+/// plug time to settle after a reboot or network blip.
 final class TapoService {
   final HttpClient _httpClient = HttpClient();
   final Map<String, _TapoSession> _sessions = {};
@@ -30,7 +38,8 @@ final class TapoService {
     final key = '$cleanIp:$email';
     return _sessions.putIfAbsent(
       key,
-      () => _TapoSession(ip: cleanIp, email: email, password: password, client: _httpClient),
+      () => _TapoSession(
+          ip: cleanIp, email: email, password: password, client: _httpClient),
     );
   }
 
@@ -44,7 +53,13 @@ final class TapoService {
   }
 
   /// Clears any cached session for the given credentials, forcing a fresh
-  /// KLAP handshake on the next call. Call this after credential changes.
+  /// KLAP handshake on the next call.
+  ///
+  /// Call this:
+  /// - After credential changes in Settings.
+  /// - Before each automation plug action ([AutomationEngine] does this) to
+  ///   avoid stale-cookie timeouts when the plug was power-cycled during the
+  ///   low-battery sequence.
   void resetSession({required String ip, required String email}) {
     _sessions.remove('${_normalizeIp(ip)}:$email');
   }
@@ -74,25 +89,38 @@ final class TapoService {
   }
 
   /// Returns the current on/off state of the plug, or null on any error.
-Future<bool?> isOn({
-  required String ip,
-  required String email,
-  required String password,
-}) async {
-  final session = _getOrCreateSession(ip, email, password);
-  try {
-    final info = await session.getDeviceInfo();
-    return info['device_on'] as bool?;
-  } catch (e) {
-    Log.e('TapoService', 'isOn check failed', e);
-    return null; // null = unknown, caller decides how to handle
+  ///
+  /// Retries once on failure (with a fresh handshake) to handle stale
+  /// sessions and transient network blips.
+  Future<bool?> isOn({
+    required String ip,
+    required String email,
+    required String password,
+  }) async {
+    final session = _getOrCreateSession(ip, email, password);
+    try {
+      final info = await session.getDeviceInfo();
+      return info['device_on'] as bool?;
+    } catch (e) {
+      // Session was auto-reset by _request(). Retry once with a fresh handshake.
+      Log.w('TapoService', 'isOn attempt 1 failed, retrying in 2 s — $e');
+      await Future<void>.delayed(const Duration(seconds: 2));
+      try {
+        final info = await session.getDeviceInfo();
+        return info['device_on'] as bool?;
+      } catch (e2) {
+        Log.e('TapoService', 'isOn failed after retry', e2);
+        return null;
+      }
+    }
   }
-}
 
   /// Sets the on/off state of the smart plug.
   ///
-  /// Returns true on success. On failure, the session is reset so the next
-  /// attempt performs a clean re-handshake.
+  /// Returns true on success. Retries once on failure (with a fresh
+  /// handshake) to handle stale KLAP sessions — most commonly triggered
+  /// when the plug is power-cycled during the ON sequence and the app's
+  /// cached session cookie becomes invalid.
   Future<bool> setOn({
     required String ip,
     required String email,
@@ -100,13 +128,25 @@ Future<bool?> isOn({
     required bool on,
   }) async {
     final session = _getOrCreateSession(ip, email, password);
+    final action = on ? 'ON' : 'OFF';
     try {
       await session.setDeviceStatus(on);
-      Log.i('TapoService', 'Plug set to ${on ? "ON" : "OFF"}');
+      Log.i('TapoService', 'Plug set to $action');
       return true;
     } catch (e) {
-      Log.e('TapoService', 'setOn failed', e);
-      return false;
+      // _request() already reset the session on failure, so the retry will
+      // perform a clean re-handshake. A 2 s delay lets the plug settle after
+      // a reboot or network interruption.
+      Log.w('TapoService', 'setOn $action attempt 1 failed, retrying in 2 s — $e');
+      await Future<void>.delayed(const Duration(seconds: 2));
+      try {
+        await session.setDeviceStatus(on);
+        Log.i('TapoService', 'Plug set to $action (retry succeeded)');
+        return true;
+      } catch (e2) {
+        Log.e('TapoService', 'setOn $action failed after retry', e2);
+        return false;
+      }
     }
   }
 
@@ -121,12 +161,15 @@ Future<bool?> isOn({
 
   String _friendlyError(Object e) {
     final msg = e.toString();
-    if (msg.contains('Connection refused') || msg.contains('Failed host lookup')) {
+    if (msg.contains('Connection refused') ||
+        msg.contains('Failed host lookup')) {
       return 'Plug not reachable — check the IP address';
     }
-    if (msg.contains('authenticate')) return 'Authentication failed — check your credentials';
+    if (msg.contains('authenticate')) {
+      return 'Authentication failed — check your credentials';
+    }
     if (msg.contains('TimeoutException') || msg.contains('timed out')) {
-      return 'Request timed out';
+      return 'Request timed out — plug may be offline or unreachable';
     }
     return msg.length > 80 ? '${msg.substring(0, 80)}…' : msg;
   }
@@ -183,7 +226,8 @@ final class _TapoSession {
 
   Uint8List _randomBytes(int count) {
     final rng = Random.secure();
-    return Uint8List.fromList(List.generate(count, (_) => rng.nextInt(256)));
+    return Uint8List.fromList(
+        List.generate(count, (_) => rng.nextInt(256)));
   }
 
   bool _bytesEqual(List<int> a, List<int> b) {
@@ -195,7 +239,10 @@ final class _TapoSession {
   }
 
   int _int32BigEndian(Uint8List bytes) {
-    return ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3])
+    return ((bytes[0] << 24) |
+            (bytes[1] << 16) |
+            (bytes[2] << 8) |
+            bytes[3])
         .toSigned(32);
   }
 
@@ -221,7 +268,8 @@ final class _TapoSession {
     return data.sublist(0, data.length - padLen);
   }
 
-  Uint8List _aesCbcEncrypt(Uint8List key, Uint8List iv, Uint8List padded) {
+  Uint8List _aesCbcEncrypt(
+      Uint8List key, Uint8List iv, Uint8List padded) {
     final cipher = CBCBlockCipher(AESEngine())
       ..init(true, ParametersWithIV(KeyParameter(key), iv));
     final out = Uint8List(padded.length);
@@ -232,7 +280,8 @@ final class _TapoSession {
     return out;
   }
 
-  Uint8List _aesCbcDecrypt(Uint8List key, Uint8List iv, Uint8List ciphertext) {
+  Uint8List _aesCbcDecrypt(
+      Uint8List key, Uint8List iv, Uint8List ciphertext) {
     final cipher = CBCBlockCipher(AESEngine())
       ..init(false, ParametersWithIV(KeyParameter(key), iv));
     final out = Uint8List(ciphertext.length);
@@ -256,18 +305,20 @@ final class _TapoSession {
     }
     final uri = Uri.parse(url);
 
-    final request = await client
-        .postUrl(uri)
-        .timeout(const Duration(seconds: 6));
+    final request =
+        await client.postUrl(uri).timeout(const Duration(seconds: 6));
 
     // TP-Link KLAP firmware is strict about header casing.
     request.headers
       ..add('Host', uri.host, preserveHeaderCase: true)
-      ..add('User-Agent', 'python-requests/2.28.1', preserveHeaderCase: true)
+      ..add('User-Agent', 'python-requests/2.28.1',
+          preserveHeaderCase: true)
       ..add('Accept', '*/*', preserveHeaderCase: true)
-      ..add('Accept-Encoding', 'gzip, deflate', preserveHeaderCase: true)
+      ..add('Accept-Encoding', 'gzip, deflate',
+          preserveHeaderCase: true)
       ..add('Connection', 'keep-alive', preserveHeaderCase: true)
-      ..add('Content-Length', body.length.toString(), preserveHeaderCase: true);
+      ..add('Content-Length', body.length.toString(),
+          preserveHeaderCase: true);
 
     if (_cookie != null) {
       request.headers.add('Cookie', _cookie!, preserveHeaderCase: true);
@@ -277,7 +328,6 @@ final class _TapoSession {
     final response = await request.close();
 
     if (response.statusCode != 200) {
-      // Drain body to leave connection in a clean state.
       await response.drain<List<int>>().timeout(const Duration(seconds: 4));
       throw HttpException(
         'HTTP ${response.statusCode} ${response.reasonPhrase}',
@@ -285,8 +335,8 @@ final class _TapoSession {
       );
     }
 
-    final responseBytes = await _readResponse(response)
-        .timeout(const Duration(seconds: 8));
+    final responseBytes =
+        await _readResponse(response).timeout(const Duration(seconds: 8));
 
     // Extract session cookie (never logged — it's a live credential).
     final setCookie = response.headers.value('set-cookie');
@@ -330,25 +380,24 @@ final class _TapoSession {
     Uint8List? authHash;
     for (var i = 0; i < candidates.length; i++) {
       final ah = _calcAuthHash(candidates[i][0], candidates[i][1]);
-      final combined = Uint8List(
-          localSeed.length + remoteSeed.length + ah.length)
-        ..setAll(0, localSeed)
-        ..setAll(localSeed.length, remoteSeed)
-        ..setAll(localSeed.length + remoteSeed.length, ah);
+      final combined =
+          Uint8List(localSeed.length + remoteSeed.length + ah.length)
+            ..setAll(0, localSeed)
+            ..setAll(localSeed.length, remoteSeed)
+            ..setAll(localSeed.length + remoteSeed.length, ah);
 
       if (_bytesEqual(_sha256(combined), serverHash)) {
         authHash = ah;
-        // Log index only — never log credentials, even on success.
         Log.i('TapoService', 'Handshake credential set #$i matched');
         break;
       }
     }
 
     if (authHash == null) {
-      throw StateError('Authentication failed — no credential set matched server hash');
+      throw StateError(
+          'Authentication failed — no credential set matched server hash');
     }
 
-    // Handshake 2: prove we hold the matching credentials.
     final hs2Payload = _sha256(
       Uint8List(remoteSeed.length + localSeed.length + authHash.length)
         ..setAll(0, remoteSeed)
@@ -357,7 +406,6 @@ final class _TapoSession {
     );
     await _post('handshake2', hs2Payload);
 
-    // Derive session material from the shared seeds.
     _key = _deriveKey('lsk', localSeed, remoteSeed, authHash).sublist(0, 16);
 
     final ivSeq = _deriveKey('iv', localSeed, remoteSeed, authHash);
@@ -368,7 +416,6 @@ final class _TapoSession {
         _deriveKey('ldk', localSeed, remoteSeed, authHash).sublist(0, 28);
 
     Log.i('TapoService', 'KLAP handshake complete');
-    // key / iv / sigPrefix intentionally not logged — live encryption material.
   }
 
   Uint8List _deriveKey(
@@ -392,7 +439,8 @@ final class _TapoSession {
       ..setAll(0, _iv!)
       ..setAll(_iv!.length, seqBytes);
 
-    final ciphertext = _aesCbcEncrypt(_key!, aesIv, _pkcs7Pad(plaintext, 16));
+    final ciphertext =
+        _aesCbcEncrypt(_key!, aesIv, _pkcs7Pad(plaintext, 16));
 
     final sigInput = Uint8List(
         _sigPrefix!.length + seqBytes.length + ciphertext.length)
@@ -420,7 +468,8 @@ final class _TapoSession {
 
   // ── High-level request ──────────────────────────────────────────────────────
 
-  Future<dynamic> _request(String method, [Map<String, dynamic>? params]) async {
+  Future<dynamic> _request(String method,
+      [Map<String, dynamic>? params]) async {
     if (!_isInitialized) await _initialize();
 
     final payload = <String, dynamic>{'method': method};
@@ -436,13 +485,15 @@ final class _TapoSession {
         queryParams: {'seq': _seq.toString()},
       );
 
-      final decrypted = jsonDecode(utf8.decode(_decrypt(responseBytes)))
-          as Map<String, dynamic>;
+      final decrypted =
+          jsonDecode(utf8.decode(_decrypt(responseBytes)))
+              as Map<String, dynamic>;
 
       final errorCode = decrypted['error_code'] as int? ?? -1;
       if (errorCode != 0) {
-        reset(); // Force re-handshake next attempt.
-        throw StateError('Device returned error_code $errorCode for "$method"');
+        reset();
+        throw StateError(
+            'Device returned error_code $errorCode for "$method"');
       }
 
       return decrypted['result'];
