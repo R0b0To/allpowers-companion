@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
 import '../models/energy_log_entry.dart';
+import '../models/mqtt_settings.dart';
 import '../utils/logger.dart';
 
 /// Typed, error-safe wrapper around [SharedPreferences].
@@ -21,7 +22,7 @@ import '../utils/logger.dart';
 ///   needs to grow well beyond [_maxEnergyLogEntries], consider moving it to
 ///   sqflite instead of SharedPreferences.
 final class StorageService {
-  // ── Keys ──────────────────────────────────────────────────────────────────
+  // ── Keys — automation / BLE ──────────────────────────────────────────────
   static const _keyDeviceId = 'saved_device_id';
   static const _keyAutoEnabled = 'auto_enabled';
   static const _keyTapoOnUrl = 'tapo_on_url';
@@ -37,6 +38,16 @@ final class StorageService {
   static const _keyChargingTriggered = 'charging_triggered';
   static const _keyAutomationHistory = 'automation_history';
   static const _keyEnergyLog = 'energy_log';
+
+  // ── Keys — MQTT ──────────────────────────────────────────────────────────
+  static const _keyMqttMode = 'mqtt_mode';
+  static const _keyMqttBrokerHost = 'mqtt_broker_host';
+  static const _keyMqttPort = 'mqtt_port';
+  static const _keyMqttUsername = 'mqtt_username';
+  static const _keyMqttPassword = 'mqtt_password';
+  static const _keyMqttTopicPrefix = 'mqtt_topic_prefix';
+  static const _keyMqttUseTls = 'mqtt_use_tls';
+  static const _keyMqttClientId = 'mqtt_client_id';
 
   /// Hard cap on stored history entries — keeps SharedPreferences (which is
   /// not meant for large blobs) bounded regardless of how long the app runs.
@@ -126,6 +137,50 @@ final class StorageService {
       ]);
     } catch (e) {
       Log.e('StorageService', 'saveAutomationSettings failed', e);
+    }
+  }
+
+  // ── MQTT settings ─────────────────────────────────────────────────────────
+
+  Future<MqttSettings> loadMqttSettings() async {
+    try {
+      final prefs = await _getPrefs();
+      final modeStr = prefs.getString(_keyMqttMode) ?? AppMode.standalone.name;
+      final mode = AppMode.values.firstWhere(
+        (m) => m.name == modeStr,
+        orElse: () => AppMode.standalone,
+      );
+      return MqttSettings(
+        mode: mode,
+        brokerHost: prefs.getString(_keyMqttBrokerHost) ?? '',
+        port: prefs.getInt(_keyMqttPort) ?? 1883,
+        username: prefs.getString(_keyMqttUsername) ?? '',
+        password: prefs.getString(_keyMqttPassword) ?? '',
+        topicPrefix: prefs.getString(_keyMqttTopicPrefix) ?? 'ap/station',
+        useTls: prefs.getBool(_keyMqttUseTls) ?? false,
+        clientId: prefs.getString(_keyMqttClientId) ?? '',
+      );
+    } catch (e) {
+      Log.e('StorageService', 'loadMqttSettings failed, returning defaults', e);
+      return const MqttSettings();
+    }
+  }
+
+  Future<void> saveMqttSettings(MqttSettings settings) async {
+    try {
+      final prefs = await _getPrefs();
+      await Future.wait([
+        prefs.setString(_keyMqttMode, settings.mode.name),
+        prefs.setString(_keyMqttBrokerHost, settings.brokerHost),
+        prefs.setInt(_keyMqttPort, settings.port),
+        prefs.setString(_keyMqttUsername, settings.username),
+        prefs.setString(_keyMqttPassword, settings.password),
+        prefs.setString(_keyMqttTopicPrefix, settings.topicPrefix),
+        prefs.setBool(_keyMqttUseTls, settings.useTls),
+        prefs.setString(_keyMqttClientId, settings.clientId),
+      ]);
+    } catch (e) {
+      Log.e('StorageService', 'saveMqttSettings failed', e);
     }
   }
 

@@ -148,3 +148,49 @@ final class AutomationSettings {
         tapoPassword,
       );
 }
+
+// ── JSON Serialization Extension ─────────────────────────────────────────────
+
+extension AutomationSettingsJson on AutomationSettings {
+  /// Packs configuration data into a map suitable for JSON transmission over MQTT.
+  Map<String, dynamic> toJson() {
+    return {
+      'enabled': enabled,
+      'tapoOnUrl': tapoOnUrl,
+      'tapoOffUrl': tapoOffUrl,
+      'lowThreshold': lowThreshold,
+      'highThreshold': highThreshold,
+      'startTime': '${startTime.hour.toString().padLeft(2, '0')}:${startTime.minute.toString().padLeft(2, '0')}',
+      'endTime': '${endTime.hour.toString().padLeft(2, '0')}:${endTime.minute.toString().padLeft(2, '0')}',
+      'useLocalTapo': useLocalTapo,
+      'tapoIp': tapoIp,
+      'tapoEmail': tapoEmail,
+      'tapoPassword': tapoPassword,
+    };
+  }
+
+  /// Restores settings using your factory .validated constructor.
+  static AutomationSettings fromJson(Map<String, dynamic> json) {
+    TimeOfDay parseTime(String value) {
+      final parts = value.split(':');
+      return TimeOfDay(
+        hour: int.parse(parts[0]).clamp(0, 23),
+        minute: int.parse(parts[1]).clamp(0, 59),
+      );
+    }
+
+    return AutomationSettings.validated(
+      enabled: json['enabled'] as bool? ?? false,
+      tapoOnUrl: json['tapoOnUrl'] as String? ?? '',
+      tapoOffUrl: json['tapoOffUrl'] as String? ?? '',
+      lowThreshold: (json['lowThreshold'] as num? ?? 10).toInt(),
+      highThreshold: (json['highThreshold'] as num? ?? 95).toInt(),
+      startTime: parseTime(json['startTime'] as String? ?? '21:00'),
+      endTime: parseTime(json['endTime'] as String? ?? '08:00'),
+      useLocalTapo: json['useLocalTapo'] as bool? ?? false,
+      tapoIp: json['tapoIp'] as String? ?? '',
+      tapoEmail: json['tapoEmail'] as String? ?? '',
+      tapoPassword: json['tapoPassword'] as String? ?? '',
+    );
+  }
+}
