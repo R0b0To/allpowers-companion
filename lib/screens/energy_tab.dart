@@ -7,14 +7,16 @@ import '../theme/app_theme.dart';
 import '../widgets/line_chart_painter.dart';
 import '../widgets/metric_card.dart';
 
-enum _Range { day, week, month, all }
+// Expanded ranges to support narrower, more precise zoom intervals
+enum _Range { threeHours, sixHours, day, week, month, all }
 
 /// Displays battery and power trend graphs derived from [EnergyLogService]'s
 /// periodically-sampled history.
 ///
-/// Both charts share a synchronised crosshair: tapping or dragging on either
-/// chart moves the crosshair on both simultaneously and reveals a detail card
-/// showing the exact reading at that moment.
+/// Upgraded with:
+/// - Granular 3h & 6h range filters to expand the chart X-axis.
+/// - Chronological stepping buttons on the detail card for exact hour-by-hour inspection.
+/// - Scrollable horizontal range selector to prevent screen overflow.
 class EnergyTab extends StatefulWidget {
   const EnergyTab({
     super.key,
@@ -37,6 +39,8 @@ class _EnergyTabState extends State<EnergyTab> {
   DateTime? _selectedTime;
 
   Duration? get _rangeDuration => switch (_range) {
+        _Range.threeHours => const Duration(hours: 3),
+        _Range.sixHours => const Duration(hours: 6),
         _Range.day => const Duration(hours: 24),
         _Range.week => const Duration(days: 7),
         _Range.month => const Duration(days: 30),
@@ -68,6 +72,29 @@ class _EnergyTabState extends State<EnergyTab> {
   void _onSelect(DateTime? t) => setState(() => _selectedTime = t);
   void _clearSelection() => setState(() => _selectedTime = null);
 
+  /// Steps the active selection forward or backward chronologically through the filtered list.
+  void _stepSelection(int offset) {
+    final entries = _filteredEntries();
+    if (entries.isEmpty) return;
+
+    final selectedEntry = _selectedTime != null ? _nearestEntry(_selectedTime!) : null;
+    if (selectedEntry == null) {
+      // If nothing is selected, start at the first or last entry depending on direction
+      setState(() {
+        _selectedTime = offset > 0 ? entries.first.timestamp : entries.last.timestamp;
+      });
+      return;
+    }
+
+    final currentIndex = entries.indexOf(selectedEntry);
+    if (currentIndex == -1) return;
+
+    final newIndex = (currentIndex + offset).clamp(0, entries.length - 1);
+    setState(() {
+      _selectedTime = entries[newIndex].timestamp;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -85,8 +112,12 @@ class _EnergyTabState extends State<EnergyTab> {
 
     final s = widget.strings;
     final entries = _filteredEntries();
-    final selectedEntry =
-        _selectedTime != null ? _nearestEntry(_selectedTime!) : null;
+    
+    // Determine details for stepping index tracking
+    final selectedEntry = _selectedTime != null ? _nearestEntry(_selectedTime!) : null;
+    final int selectedIndex = selectedEntry != null ? entries.indexOf(selectedEntry) : -1;
+    final bool hasPrevious = selectedIndex > 0;
+    final bool hasNext = selectedIndex != -1 && selectedIndex < entries.length - 1;
 
     return CustomScrollView(
       slivers: [
@@ -123,7 +154,10 @@ class _EnergyTabState extends State<EnergyTab> {
                 _RangeSelector(
                   range: _range,
                   strings: s,
-                  onChanged: (r) => setState(() => _range = r),
+                  onChanged: (r) => setState(() {
+                    _range = r;
+                    _clearSelection(); // Clear to prevent out-of-bounds metrics
+                  }),
                 ),
                 const SizedBox(height: AppSpacing.xxl),
               ],
@@ -166,7 +200,7 @@ class _EnergyTabState extends State<EnergyTab> {
                 _StatsGrid(entries: entries, strings: s),
                 const SizedBox(height: AppSpacing.lg),
 
-                // ── Selection detail card ────────────────────────────────────
+                // ── Selection detail card with step controller ───────────────
                 AnimatedSize(
                   duration: const Duration(milliseconds: 200),
                   curve: Curves.easeOut,
@@ -178,6 +212,8 @@ class _EnergyTabState extends State<EnergyTab> {
                             entry: selectedEntry,
                             strings: s,
                             onDismiss: _clearSelection,
+                            onPrevious: hasPrevious ? () => _stepSelection(-1) : null,
+                            onNext: hasNext ? () => _stepSelection(1) : null,
                           ),
                         )
                       : Padding(
@@ -190,7 +226,7 @@ class _EnergyTabState extends State<EnergyTab> {
                                   color: AppColors.textTertiary),
                               const SizedBox(width: AppSpacing.xs),
                               Text(
-                                'Tap or drag on a chart to inspect a reading',
+                                'Tap on chart or use step buttons to inspect',
                                 style: AppTypography.labelSm,
                               ),
                             ],
@@ -321,18 +357,22 @@ class _EnergyTabState extends State<EnergyTab> {
   }
 }
 
-// ── Detail inspection card ────────────────────────────────────────────────────
+// ── Detail inspection card with stepper ───────────────────────────────────────
 
 class _DetailCard extends StatelessWidget {
   const _DetailCard({
     required this.entry,
     required this.strings,
     required this.onDismiss,
+    required this.onPrevious,
+    required this.onNext,
   });
 
   final EnergyLogEntry entry;
   final AppStrings strings;
   final VoidCallback onDismiss;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
 
   String _formatDate(DateTime t) {
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -357,7 +397,7 @@ class _DetailCard extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.md),
+          horizontal: AppSpacing.sm, vertical: AppSpacing.md),
       decoration: BoxDecoration(
         color: AppColors.surfaceElevated,
         borderRadius: AppRadius.mdBR,
@@ -366,6 +406,17 @@ class _DetailCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          // Step Back Chronologically
+          IconButton(
+            onPressed: onPrevious,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            icon: Icon(
+              Icons.chevron_left_rounded,
+              color: onPrevious != null ? AppColors.teal : AppColors.textDisabled,
+            ),
+          ),
+          
           // Timestamp
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -381,7 +432,7 @@ class _DetailCard extends StatelessWidget {
 
           // Divider
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
             child: Container(width: 1, height: 32, color: AppColors.border),
           ),
 
@@ -408,18 +459,30 @@ class _DetailCard extends StatelessWidget {
                   label: strings.t('discharging'),
                   value: '${entry.outputWatts} W',
                 ),
-                // Outlet states
                 _OutletStateColumn(entry: entry),
               ],
             ),
           ),
+
+          // Step Forward Chronologically
+          IconButton(
+            onPressed: onNext,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            icon: Icon(
+              Icons.chevron_right_rounded,
+              color: onNext != null ? AppColors.teal : AppColors.textDisabled,
+            ),
+          ),
+          
+          const SizedBox(width: AppSpacing.xs),
 
           // Dismiss
           GestureDetector(
             onTap: onDismiss,
             behavior: HitTestBehavior.opaque,
             child: Padding(
-              padding: const EdgeInsets.only(left: AppSpacing.sm),
+              padding: const EdgeInsets.only(right: AppSpacing.xs),
               child: Icon(Icons.close_rounded,
                   size: 16, color: AppColors.textTertiary),
             ),
@@ -465,7 +528,6 @@ class _DetailMetric extends StatelessWidget {
   }
 }
 
-/// Small column showing which outlets were active at the selected sample.
 class _OutletStateColumn extends StatelessWidget {
   const _OutletStateColumn({required this.entry});
   final EnergyLogEntry entry;
@@ -502,7 +564,7 @@ class _OutletStateColumn extends StatelessWidget {
   }
 }
 
-// ── Range selector ────────────────────────────────────────────────────────────
+// ── Range selector with Horizontal Scroll ────────────────────────────────────
 
 class _RangeSelector extends StatelessWidget {
   const _RangeSelector({
@@ -518,49 +580,57 @@ class _RangeSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final options = {
-      _Range.day: strings.t('range_day'),
-      _Range.week: strings.t('range_week'),
-      _Range.month: strings.t('range_month'),
-      _Range.all: strings.t('range_all'),
+      _Range.threeHours: '3h',
+      _Range.sixHours: '6h',
+      _Range.day: strings.t('range_day') ?? '24h',
+      _Range.week: strings.t('range_week') ?? 'Week',
+      _Range.month: strings.t('range_month') ?? 'Month',
+      _Range.all: strings.t('range_all') ?? 'All',
     };
 
-    return Row(
-      children: options.entries.map((entry) {
-        final selected = entry.key == range;
-        return Padding(
-          padding: const EdgeInsets.only(right: AppSpacing.sm),
-          child: GestureDetector(
-            onTap: () => onChanged(entry.key),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: selected
-                    ? AppColors.tealSurface
-                    : AppColors.surface,
-                borderRadius:
-                    BorderRadius.circular(AppRadius.full),
-                border: Border.all(
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        children: options.entries.map((entry) {
+          final selected = entry.key == range;
+          return Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.sm),
+            child: GestureDetector(
+              onTap: () => onChanged(entry.key),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
                   color: selected
-                      ? AppColors.teal.withOpacity(0.4)
-                      : AppColors.border,
+                      ? AppColors.tealSurface
+                      : AppColors.surface,
+                  borderRadius:
+                      BorderRadius.circular(AppRadius.full),
+                  border: Border.all(
+                    color: selected
+                        ? AppColors.teal.withOpacity(0.4)
+                        : AppColors.border,
+                  ),
                 ),
-              ),
-              child: Text(
-                entry.value,
-                style: AppTypography.labelMd.copyWith(
-                  color: selected
+                child: Text(
+                  entry.value,
+                  style: AppTypography.labelMd.copyWith(
+                    color: selected
                       ? AppColors.teal
                       : AppColors.textSecondary,
+                  ),
                 ),
               ),
             ),
-          ),
-        );
-      }).toList(),
+          );
+        }).toList(),
+      ),
     );
   }
 }
+
+// ... Rest of your unchanged helper classes (_ChartCard, _Legend, _StatsGrid) ...
 
 // ── Chart card wrapper ────────────────────────────────────────────────────────
 
