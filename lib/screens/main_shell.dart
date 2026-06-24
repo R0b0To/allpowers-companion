@@ -40,6 +40,12 @@ class _MainShellState extends State<MainShell> {
   final _tapo = TapoService();
   final _mqtt = MqttService();
 
+  // ── Throttling states ──────────────────────────────────────────────────────
+  DateTime? _lastMqttPublishTime;
+  bool? _lastAcState;
+  bool? _lastDcState;
+  bool? _lastUsbState;
+
   late final HistoryService _history = HistoryService(_storage);
   late final EnergyLogService _energyLog = EnergyLogService(_storage);
   late final BleService _ble;
@@ -98,16 +104,32 @@ class _MainShellState extends State<MainShell> {
     await _mqtt.configure(mqttSettings);
   }
 
-  // ── BLE status pipeline ────────────────────────────────────────────────────
-
+  /// Called on every decoded BLE status packet.
   void _onBleStatus(status) {
     _notifications.handleBatteryLevel(status.batteryLevel);
     _automation.evaluate(_settings);
     _energyLog.recordSample(status);
     ForegroundService.updateStatus(connected: true, status: status);
 
+    // Forward to MQTT broker when acting as gateway.
     if (_mqttSettings.mode == AppMode.gateway) {
-      _mqtt.publishStatus(status, bleConnected: true);
+      final now = DateTime.now();
+      final lastPublish = _lastMqttPublishTime;
+
+      // Detect if an outlet state changed (forces an immediate bypass)
+      final stateChanged = _lastAcState == null ||
+          status.isAcOn != _lastAcState ||
+          status.isDcOn != _lastDcState ||
+          status.isUsbOn != _lastUsbState;
+
+      // Publish instantly on state changes, otherwise throttle standard telemetry to 5-second intervals
+      if (stateChanged || lastPublish == null || now.difference(lastPublish).inSeconds >= 5) {
+        _mqtt.publishStatus(status, bleConnected: true);
+        _lastMqttPublishTime = now;
+        _lastAcState = status.isAcOn;
+        _lastDcState = status.isDcOn;
+        _lastUsbState = status.isUsbOn;
+      }
     }
   }
 
