@@ -5,11 +5,13 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../l10n/app_strings.dart';
 import '../models/automation_settings.dart';
+import '../models/mqtt_settings.dart';
 import '../services/automation_engine.dart';
 import '../services/ble_service.dart';
 import '../services/energy_log_service.dart';
 import '../services/foreground_service.dart';
 import '../services/history_service.dart';
+import '../services/mqtt_service.dart';
 import '../services/notification_service.dart';
 import '../services/storage_service.dart';
 import '../services/tapo_service.dart';
@@ -19,19 +21,10 @@ import 'automations_tab.dart';
 import 'control_tab.dart';
 import 'energy_tab.dart';
 import 'history_tab.dart';
+import 'mqtt_client_tab.dart';
+import 'settings_tab.dart'; // Import your new settings tab
 
 /// Root shell: owns all service singletons and hosts the bottom navigation.
-///
-/// ## Background execution
-/// After bootstrap completes, [ForegroundService.start] promotes the process
-/// to an Android foreground service so it survives screen-off, app switch,
-/// and device reboot. All BLE callbacks and the automation engine continue
-/// running on the main isolate — the foreground service is a thin shell
-/// whose only job is to prevent the OS from killing the process.
-///
-/// On iOS the foreground service is a no-op; background BLE continuity is
-/// handled instead by the `bluetooth-central` background mode declared in
-/// Info.plist.
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -45,14 +38,16 @@ class _MainShellState extends State<MainShell> {
   final _notifications = NotificationService();
   final _webhooks = WebhookService();
   final _tapo = TapoService();
+  final _mqtt = MqttService();
 
   late final HistoryService _history = HistoryService(_storage);
   late final EnergyLogService _energyLog = EnergyLogService(_storage);
   late final BleService _ble;
   late final AutomationEngine _automation;
 
-  // ── UI state ───────────────────────────────────────────────────────────────
+  // ── UI / settings state ────────────────────────────────────────────────────
   AutomationSettings _settings = const AutomationSettings();
+  MqttSettings _mqttSettings = const MqttSettings();
   bool _permissionsPermanentlyDenied = false;
   int _selectedIndex = 0;
   bool _bootstrapped = false;
@@ -71,50 +66,89 @@ class _MainShellState extends State<MainShell> {
     await _notifications.init();
     await _requestPermissions();
 
-    // Start the foreground service early so that even if the user background
-    // the app during the rest of bootstrap, the process stays alive.
     await ForegroundService.start();
-
-    // One-time prompt to exempt from battery optimisation (Samsung / Xiaomi /
-    // Huawei OEM battery savers can suspend foreground services without this).
     await ForegroundService.requestBatteryOptimizationExemption();
 
-    final settings = await _storage.loadAutomationSettings();
+    // Load both settings bundles in parallel.
+    final results = await Future.wait([
+      _storage.loadAutomationSettings(),
+      _storage.loadMqttSettings(),
+    ]);
+    final autoSettings = results[0] as AutomationSettings;
+    final mqttSettings = results[1] as MqttSettings;
+
     if (!mounted) return;
     setState(() {
-      _settings = settings;
+      _settings = autoSettings;
+      _mqttSettings = mqttSettings;
       _bootstrapped = true;
     });
 
-    // Keep the foreground notification in sync with connection state changes.
     _ble.addListener(_onBleStateChanged);
-
-    _ble.onStatus = (status) {
-      _notifications.handleBatteryLevel(status.batteryLevel);
-      _automation.evaluate(_settings);
-      _energyLog.recordSample(status);
-      // Update notification text with live battery / wattage data.
-      ForegroundService.updateStatus(connected: true, status: status);
-    };
+    _ble.onStatus = _onBleStatus;
 
     await _history.init();
     await _energyLog.init();
     await _automation.init();
     await _ble.init();
+
+    _mqtt.onCommand = _onMqttCommand;
+    _mqtt.onConfigReceived = _onMqttConfigReceived;
+
+    await _mqtt.configure(mqttSettings);
   }
 
-  // ── BLE state listener ─────────────────────────────────────────────────────
+  // ── BLE status pipeline ────────────────────────────────────────────────────
 
-  /// Called by [BleService] (ChangeNotifier) on every state change:
-  /// scanning start/stop, connect, disconnect, characteristic discovery…
-  ///
-  /// We use this to keep the foreground notification accurate even when
-  /// no status packets are arriving (e.g. while scanning or disconnected).
+  void _onBleStatus(status) {
+    _notifications.handleBatteryLevel(status.batteryLevel);
+    _automation.evaluate(_settings);
+    _energyLog.recordSample(status);
+    ForegroundService.updateStatus(connected: true, status: status);
+
+    if (_mqttSettings.mode == AppMode.gateway) {
+      _mqtt.publishStatus(status, bleConnected: true);
+    }
+  }
+
   void _onBleStateChanged() {
     ForegroundService.updateStatus(
       connected: _ble.isConnected,
       status: _ble.isConnected ? _ble.status : null,
     );
+
+    if (!_ble.isConnected && _mqttSettings.mode == AppMode.gateway) {
+      _mqtt.publishStatus(_ble.status, bleConnected: false);
+    }
+  }
+
+  // ── MQTT Command Routing ───────────────────────────────────────────────────
+
+  void _onMqttCommand(String outlet, bool value) {
+    if (_mqttSettings.mode != AppMode.gateway) return;
+    if (!_ble.isConnected) return;
+
+    switch (outlet) {
+      case 'usb':
+        _ble.setUsb(value);
+      case 'ac':
+        _ble.setAc(value);
+      case 'dc':
+        _ble.setDc(value);
+      default:
+        break;
+    }
+  }
+
+  // ── MQTT Config Syncing ────────────────────────────────────────────────────
+
+  void _onMqttConfigReceived(AutomationSettings updated) {
+    if (_mqttSettings.mode != AppMode.gateway) return;
+    
+    setState(() {
+      _settings = updated;
+    });
+    _storage.saveAutomationSettings(updated);
   }
 
   // ── Permissions ────────────────────────────────────────────────────────────
@@ -124,9 +158,6 @@ class _MainShellState extends State<MainShell> {
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.location,
-      // POST_NOTIFICATIONS: required on Android 13+ for any notification
-      // (including the foreground service notification).
-      // Gracefully granted / ignored on older Android and iOS.
       if (Platform.isAndroid) Permission.notification,
     ];
 
@@ -144,19 +175,27 @@ class _MainShellState extends State<MainShell> {
   Future<void> _onSettingsChanged(AutomationSettings updated) async {
     setState(() => _settings = updated);
     await _storage.saveAutomationSettings(updated);
+
+    if (_mqttSettings.mode == AppMode.client) {
+      _mqtt.publishAutomationConfig(updated);
+    }
+  }
+
+  Future<void> _onMqttSettingsChanged(MqttSettings updated) async {
+    setState(() => _mqttSettings = updated);
+    await _storage.saveMqttSettings(updated);
+    await _mqtt.configure(updated);
   }
 
   // ── Dispose ────────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
-    // Remove listener before disposing BLE service to avoid callbacks on a
-    // dead widget. The foreground service itself is NOT stopped here — it
-    // should continue running after the widget tree is torn down.
     _ble.removeListener(_onBleStateChanged);
     _ble.dispose();
     _history.dispose();
     _energyLog.dispose();
+    _mqtt.dispose();
     super.dispose();
   }
 
@@ -175,15 +214,21 @@ class _MainShellState extends State<MainShell> {
       );
     }
 
+    final isClientMode = _mqttSettings.mode == AppMode.client;
+
+    final controlTab = isClientMode
+        ? MqttClientTab(mqtt: _mqtt, strings: strings)
+        : ControlTab(
+            ble: _ble,
+            strings: strings,
+            permissionsPermanentlyDenied: _permissionsPermanentlyDenied,
+          );
+
     return Scaffold(
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          ControlTab(
-            ble: _ble,
-            strings: strings,
-            permissionsPermanentlyDenied: _permissionsPermanentlyDenied,
-          ),
+          controlTab,
           AutomationsTab(
             ble: _ble,
             strings: strings,
@@ -200,41 +245,123 @@ class _MainShellState extends State<MainShell> {
             history: _history,
             strings: strings,
           ),
+          SettingsTab(
+            settings: _settings,
+            mqttSettings: _mqttSettings,
+            mqtt: _mqtt,
+            tapo: _tapo,
+            strings: strings,
+            onSettingsChanged: _onSettingsChanged,
+            onMqttSettingsChanged: _onMqttSettingsChanged,
+          ), // Added the 5th Settings Tab
         ],
       ),
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          border:
-              Border(top: BorderSide(color: AppColors.border, width: 1)),
-        ),
-        child: NavigationBar(
-          selectedIndex: _selectedIndex,
-          onDestinationSelected: (i) =>
-              setState(() => _selectedIndex = i),
-          destinations: [
-            NavigationDestination(
-              icon: const Icon(Icons.bolt_outlined),
-              selectedIcon: const Icon(Icons.bolt_rounded),
-              label: strings.t('tab_control'),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_mqttSettings.mode != AppMode.standalone)
+            _MqttModeStrip(mqtt: _mqtt, mode: _mqttSettings.mode),
+          Container(
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: AppColors.border, width: 1)),
             ),
-            NavigationDestination(
-              icon: const Icon(Icons.auto_mode_outlined),
-              selectedIcon: const Icon(Icons.auto_mode_rounded),
-              label: strings.t('tab_automations'),
+            child: NavigationBar(
+              selectedIndex: _selectedIndex,
+              onDestinationSelected: (i) =>
+                  setState(() => _selectedIndex = i),
+              destinations: [
+                NavigationDestination(
+                  icon: isClientMode
+                      ? const Icon(Icons.cloud_outlined)
+                      : const Icon(Icons.bolt_outlined),
+                  selectedIcon: isClientMode
+                      ? const Icon(Icons.cloud_rounded)
+                      : const Icon(Icons.bolt_rounded),
+                  label: strings.t('tab_control'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.auto_mode_outlined),
+                  selectedIcon: const Icon(Icons.auto_mode_rounded),
+                  label: strings.t('tab_automations'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.show_chart_outlined),
+                  selectedIcon: const Icon(Icons.show_chart_rounded),
+                  label: strings.t('tab_energy'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.history_outlined),
+                  selectedIcon: const Icon(Icons.history_rounded),
+                  label: strings.t('tab_history'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.settings_outlined),
+                  selectedIcon: const Icon(Icons.settings_rounded),
+                  label: strings.t('Settings') ?? 'Settings',
+                ), // Added the 5th Navigation Destination
+              ],
             ),
-            NavigationDestination(
-              icon: const Icon(Icons.show_chart_outlined),
-              selectedIcon: const Icon(Icons.show_chart_rounded),
-              label: strings.t('tab_energy'),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.history_outlined),
-              selectedIcon: const Icon(Icons.history_rounded),
-              label: strings.t('tab_history'),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+class _MqttModeStrip extends StatelessWidget {
+  const _MqttModeStrip({required this.mqtt, required this.mode});
+
+  final MqttService mqtt;
+  final AppMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: mqtt,
+      builder: (_, __) {
+        final (bgColor, fgColor, icon, label) = _resolve();
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg, vertical: 5),
+          color: bgColor,
+          child: Row(
+            children: [
+              Icon(icon, size: 12, color: fgColor),
+              const SizedBox(width: AppSpacing.xs),
+              Text(label,
+                  style: AppTypography.labelSm.copyWith(color: fgColor)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  (Color bg, Color fg, IconData icon, String label) _resolve() {
+    final modeTag = mode == AppMode.gateway ? 'GATEWAY' : 'CLIENT';
+
+    if (mqtt.isConnecting) {
+      return (
+        AppColors.warningSurface,
+        AppColors.warning,
+        Icons.pending_rounded,
+        '$modeTag · Connecting…',
+      );
+    }
+    if (mqtt.isConnected) {
+      return (
+        AppColors.successSurface,
+        AppColors.success,
+        Icons.cloud_done_rounded,
+        '$modeTag · MQTT connected',
+      );
+    }
+    return (
+      AppColors.errorSurface,
+      AppColors.error,
+      Icons.cloud_off_rounded,
+      '$modeTag · MQTT disconnected — check Settings tab', // Updated message to refer to the Settings Tab
     );
   }
 }

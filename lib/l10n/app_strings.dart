@@ -213,5 +213,145 @@ final class AppStrings {
     'history_method_local_tapo': {'en': 'Local Tapo', 'it': 'Tapo locale'},
     'history_method_webhook': {'en': 'Webhook', 'it': 'Webhook'},
     'history_method_none': {'en': 'Not configured', 'it': 'Non configurato'},
+
+    // ── MQTT / Remote Access ─────────────────────────────────────────────────
+    'mqtt_section_title': {
+      'en': 'Remote Access',
+      'it': 'Accesso remoto',
+    },
+    'mqtt_mode_label': {
+      'en': 'App Mode',
+      'it': 'Modalità app',
+    },
+
+    // Mode names shown in the selector
+    'mqtt_mode_standalone': {
+      'en': 'Standalone',
+      'it': 'Autonomo',
+    },
+    'mqtt_mode_standalone_sub': {
+      'en': 'Direct BLE only — no MQTT',
+      'it': 'Solo BLE diretto — nessun MQTT',
+    },
+    'mqtt_mode_standalone_desc': {
+      'en': 'Classic mode: this phone holds the BLE connection and controls the station directly.',
+      'it': 'Modalità classica: questo telefono gestisce la connessione BLE e controlla la stazione direttamente.',
+    },
+    'mqtt_mode_gateway': {
+      'en': 'Gateway',
+      'it': 'Gateway',
+    },
+    'mqtt_mode_gateway_sub': {
+      'en': 'Share station data via MQTT broker',
+      'it': 'Condividi i dati via broker MQTT',
+    },
+    'mqtt_mode_gateway_desc': {
+      'en': 'This phone keeps the BLE connection and publishes telemetry to the broker. Other phones in Client mode can monitor and control the station from anywhere.',
+      'it': 'Questo telefono mantiene la connessione BLE e pubblica la telemetria sul broker. Altri telefoni in modalità Client possono monitorare e controllare la stazione ovunque.',
+    },
+    'mqtt_mode_client': {
+      'en': 'Client',
+      'it': 'Client',
+    },
+    'mqtt_mode_client_sub': {
+      'en': 'Monitor & control via MQTT — no BLE needed',
+      'it': 'Monitora e controlla via MQTT — BLE non necessario',
+    },
+    'mqtt_mode_client_desc': {
+      'en': 'No BLE required. This phone subscribes to the gateway\'s data stream and sends outlet commands back through the broker.',
+      'it': 'BLE non richiesto. Questo telefono riceve il flusso dati del gateway e invia comandi presa tramite il broker.',
+    },
+
+    // Broker fields
+    'mqtt_broker_host': {
+      'en': 'Broker host',
+      'it': 'Host broker',
+    },
+    'mqtt_port': {
+      'en': 'Port',
+      'it': 'Porta',
+    },
+    'mqtt_username': {
+      'en': 'Username (optional)',
+      'it': 'Nome utente (opzionale)',
+    },
+    'mqtt_password': {
+      'en': 'Password (optional)',
+      'it': 'Password (opzionale)',
+    },
+    'mqtt_topic_prefix': {
+      'en': 'Topic prefix',
+      'it': 'Prefisso topic',
+    },
+    'mqtt_use_tls': {
+      'en': 'TLS / SSL',
+      'it': 'TLS / SSL',
+    },
+    'mqtt_client_id': {
+      'en': 'Client ID (optional)',
+      'it': 'Client ID (opzionale)',
+    },
+    'mqtt_client_id_hint': {
+      'en': 'Auto-generated if blank',
+      'it': 'Generato automaticamente se vuoto',
+    },
+    'mqtt_status_topic': {
+      'en': 'Status',
+      'it': 'Stato',
+    },
+    'mqtt_cmd_topic': {
+      'en': 'Commands',
+      'it': 'Comandi',
+    },
+
+    // Buttons / actions
+    'mqtt_test_connection': {
+      'en': 'Test Broker Connection',
+      'it': 'Testa connessione broker',
+    },
+
+    // Connection state labels
+    'mqtt_connecting': {
+      'en': 'Connecting to MQTT broker…',
+      'it': 'Connessione al broker MQTT…',
+    },
+    'mqtt_connected': {
+      'en': 'MQTT connected',
+      'it': 'MQTT connesso',
+    },
+    'mqtt_disconnected': {
+      'en': 'MQTT disconnected',
+      'it': 'MQTT disconnesso',
+    },
+
+    // Client tab messages
+    'mqtt_broker_offline': {
+      'en': 'Cannot reach broker',
+      'it': 'Broker non raggiungibile',
+    },
+    'mqtt_check_settings': {
+      'en': 'Check your broker settings in the Automation tab.',
+      'it': 'Controlla le impostazioni broker nella scheda Automazione.',
+    },
+    'mqtt_configure_hint': {
+      'en': 'Go to Automation → Remote Access to configure.',
+      'it': 'Vai in Automazione → Accesso remoto per configurare.',
+    },
+    'mqtt_gateway_ble_offline': {
+      'en': 'Gateway has no BLE connection',
+      'it': 'Il gateway non ha connessione BLE',
+    },
+    'mqtt_gateway_ble_offline_body': {
+      'en': 'The gateway phone is connected to the broker but its Bluetooth link to the station is down. Make sure the gateway phone is near the station.',
+      'it': 'Il telefono gateway è connesso al broker ma la connessione Bluetooth alla stazione è interrotta. Assicurati che il telefono gateway sia vicino alla stazione.',
+    },
+    'mqtt_remote_label': {
+      'en': 'REMOTE',
+      'it': 'REMOTO',
+    },
+    'mqtt_command_latency_note': {
+      'en': 'Commands relay via MQTT — allow ~1 s for the gateway to respond.',
+      'it': 'I comandi transitano via MQTT — attendi ~1 s per la risposta del gateway.',
+    },
   };
 }
