@@ -1,7 +1,7 @@
 name: ap_companion
 description: "An unofficial Flutter client for ALLPOWERS batteries"
 publish_to: 'none'
-version: 0.9.3+1
+version: 0.9.5+1
 
 environment:
   sdk: ^3.12.0
@@ -19,6 +19,7 @@ dependencies:
   pointycastle: ^3.7.4
 
   flutter_foreground_task: ^9.2.2
+  mqtt_client: ^10.11.11
 
 dev_dependencies:
   flutter_test:
