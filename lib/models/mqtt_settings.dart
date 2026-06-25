@@ -54,6 +54,8 @@ final class MqttSettings {
   /// The gateway subscribes to config updates here; clients publish.
   String get configTopic => '$topicPrefix/config';
 
+  String get flowsTopic => '$topicPrefix/flows';
+
   // ── Mutation ──────────────────────────────────────────────────────────────
 
   MqttSettings copyWith({

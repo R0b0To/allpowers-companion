@@ -18,12 +18,14 @@ class AutomationsTab extends StatelessWidget {
     required this.settings,
     required this.strings,
     required this.onFlowsChanged,
+    this.isClientMode = false,
   });
 
   final List<AutomationFlow> flows;
   final AutomationSettings settings;
   final AppStrings strings;
   final ValueChanged<List<AutomationFlow>> onFlowsChanged;
+  final bool isClientMode;
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +52,33 @@ class AutomationsTab extends StatelessWidget {
                       style: AppTypography.bodyMd,
                     ),
                     const SizedBox(height: AppSpacing.lg),
+                    if (isClientMode) ...[
+  const SizedBox(height: AppSpacing.sm),
+  Container(
+    padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+    decoration: BoxDecoration(
+      color: AppColors.infoSurface,
+      borderRadius: AppRadius.mdBR,
+      border: Border.all(color: AppColors.info.withOpacity(0.3)),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.sync_rounded,
+            size: 14, color: AppColors.info),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Text(
+            'Automations sync to the gateway and run there. '
+            'Changes publish automatically when connected.',
+            style: AppTypography.labelSm
+                .copyWith(color: AppColors.info),
+          ),
+        ),
+      ],
+    ),
+  ),
+],
                   ],
                 ),
               ),

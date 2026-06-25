@@ -59,6 +59,10 @@ class _MainShellState extends State<MainShell> {
   int _selectedIndex = 0;
   bool _bootstrapped = false;
 
+  /// Prevents re-publishing flows that were just received from MQTT,
+  /// which would create an unnecessary echo on the broker.
+  bool _applyingRemoteFlows = false;
+
   @override
   void initState() {
     super.initState();
@@ -101,12 +105,12 @@ class _MainShellState extends State<MainShell> {
     await _ble.init();
 
     _mqtt.onCommand = _onMqttCommand;
-    _mqtt.onConfigReceived = _onMqttConfigReceived;
+    _mqtt.onFlowsReceived = _onMqttFlowsReceived;
     await _mqtt.configure(mqttSettings);
 
-    // Foreground service only needed when this device holds the BLE connection.
-    // In client mode the app is just an MQTT consumer; it doesn't need aggressive
-    // background/autostart behaviour and the persistent notification is misleading.
+    // Foreground service only needed when this device owns the BLE connection.
+    // In client mode the app is an MQTT consumer only; aggressive background
+    // behaviour is unnecessary and the persistent notification is misleading.
     if (mqttSettings.mode != AppMode.client) {
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
@@ -117,7 +121,10 @@ class _MainShellState extends State<MainShell> {
 
   void _onBleStatus(status) {
     _notifications.handleBatteryLevel(status.batteryLevel);
-    _flowEngine.evaluate(_flows, _settings);
+    // Flows only execute on the device that holds the BLE connection.
+    if (_mqttSettings.mode != AppMode.client) {
+      _flowEngine.evaluate(_flows, _settings);
+    }
     _energyLog.recordSample(status);
     ForegroundService.updateStatus(connected: true, status: status);
 
@@ -165,10 +172,86 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  void _onMqttConfigReceived(AutomationSettings updated) {
-    if (_mqttSettings.mode != AppMode.gateway) return;
+  /// Incoming flows from the other device. Apply locally without
+  /// re-broadcasting (the retained message already covers new subscribers).
+  Future<void> _onMqttFlowsReceived(List<AutomationFlow> flows) async {
+    if (!mounted) return;
+    _applyingRemoteFlows = true;
+    try {
+      await _applyFlows(flows);
+    } finally {
+      _applyingRemoteFlows = false;
+    }
+  }
+
+  // ── Settings callbacks ─────────────────────────────────────────────────────
+
+  Future<void> _onSettingsChanged(AutomationSettings updated) async {
     setState(() => _settings = updated);
-    _storage.saveAutomationSettings(updated);
+    await _storage.saveAutomationSettings(updated);
+    // Tapo credentials and other local settings are not synced over MQTT —
+    // they may differ between devices (e.g. different local network access).
+  }
+
+  Future<void> _onMqttSettingsChanged(MqttSettings updated) async {
+    final wasClient = _mqttSettings.mode == AppMode.client;
+    final nowClient = updated.mode == AppMode.client;
+
+    setState(() {
+      _mqttSettings = updated;
+      // Clamp selected tab index when the tab count changes.
+      final maxIndex = nowClient ? 2 : 4;
+      if (_selectedIndex > maxIndex) _selectedIndex = 0;
+    });
+
+    await _storage.saveMqttSettings(updated);
+    await _mqtt.configure(updated);
+
+    if (!wasClient && nowClient) {
+      // No longer holding the BLE connection — stop the foreground service.
+      await ForegroundService.stop();
+    } else if (wasClient && !nowClient) {
+      // Now holding the BLE connection — start the foreground service.
+      await ForegroundService.start();
+      await ForegroundService.requestBatteryOptimizationExemption();
+    }
+  }
+
+  Future<void> _onFlowsChanged(List<AutomationFlow> updated) async {
+    await _applyFlows(updated);
+
+    // Publish to MQTT so the other device gets the update, unless we're
+    // currently applying a remote update (would echo back unnecessarily).
+    if (!_applyingRemoteFlows &&
+        _mqttSettings.mode != AppMode.standalone) {
+      _mqtt.publishFlows(updated);
+    }
+  }
+
+  /// Shared logic for both local edits and remote MQTT updates.
+  /// Updates FlowEngine state, widget state, and storage.
+  Future<void> _applyFlows(List<AutomationFlow> updated) async {
+    // Tell the engine about deletions so it clears persisted trigger state.
+    final deletedIds = _flows
+        .map((f) => f.id)
+        .toSet()
+        .difference(updated.map((f) => f.id).toSet());
+    for (final id in deletedIds) {
+      await _flowEngine.onFlowDeleted(id);
+    }
+
+    // Initialise trigger state for newly added flows.
+    final addedIds = updated
+        .map((f) => f.id)
+        .toSet()
+        .difference(_flows.map((f) => f.id).toSet());
+    for (final flow in updated.where((f) => addedIds.contains(f.id))) {
+      await _flowEngine.init([flow]);
+    }
+
+    if (!mounted) return;
+    setState(() => _flows = updated);
+    await _storage.saveFlows(updated);
   }
 
   // ── Permissions ────────────────────────────────────────────────────────────
@@ -186,65 +269,6 @@ class _MainShellState extends State<MainShell> {
       _permissionsPermanentlyDenied =
           statuses.values.any((s) => s.isPermanentlyDenied);
     });
-  }
-
-  // ── Settings callbacks ─────────────────────────────────────────────────────
-
-  Future<void> _onSettingsChanged(AutomationSettings updated) async {
-    setState(() => _settings = updated);
-    await _storage.saveAutomationSettings(updated);
-    if (_mqttSettings.mode == AppMode.client) {
-      _mqtt.publishAutomationConfig(updated);
-    }
-  }
-
-  Future<void> _onMqttSettingsChanged(MqttSettings updated) async {
-    final wasClient = _mqttSettings.mode == AppMode.client;
-    final nowClient = updated.mode == AppMode.client;
-
-    setState(() {
-      _mqttSettings = updated;
-      // Clamp selected index when the tab count changes.
-      final maxIndex = nowClient ? 2 : 4;
-      if (_selectedIndex > maxIndex) _selectedIndex = 0;
-    });
-
-    await _storage.saveMqttSettings(updated);
-    await _mqtt.configure(updated);
-
-    if (!wasClient && nowClient) {
-      // Switching to client: stop the foreground service — this device is
-      // no longer maintaining a BLE connection.
-      await ForegroundService.stop();
-    } else if (wasClient && !nowClient) {
-      // Switching away from client: start the foreground service.
-      await ForegroundService.start();
-      await ForegroundService.requestBatteryOptimizationExemption();
-    }
-  }
-
-  Future<void> _onFlowsChanged(List<AutomationFlow> updated) async {
-    // Notify the engine about any deleted flows so it can clear their
-    // persisted trigger state.
-    final deletedIds = _flows
-        .map((f) => f.id)
-        .toSet()
-        .difference(updated.map((f) => f.id).toSet());
-    for (final id in deletedIds) {
-      await _flowEngine.onFlowDeleted(id);
-    }
-
-    // Re-initialise trigger state for any newly added flows.
-    final addedIds = updated
-        .map((f) => f.id)
-        .toSet()
-        .difference(_flows.map((f) => f.id).toSet());
-    for (final flow in updated.where((f) => addedIds.contains(f.id))) {
-      await _flowEngine.init([flow]);
-    }
-
-    setState(() => _flows = updated);
-    await _storage.saveFlows(updated);
   }
 
   // ── Dispose ────────────────────────────────────────────────────────────────
@@ -274,8 +298,6 @@ class _MainShellState extends State<MainShell> {
 
     final isClientMode = _mqttSettings.mode == AppMode.client;
 
-    // ── Tab screens ──────────────────────────────────────────────────────────
-
     final controlTab = isClientMode
         ? MqttClientTab(mqtt: _mqtt, strings: strings)
         : ControlTab(
@@ -289,6 +311,9 @@ class _MainShellState extends State<MainShell> {
       settings: _settings,
       strings: strings,
       onFlowsChanged: _onFlowsChanged,
+      // Tell the UI whether this device will actually run the flows, so
+      // it can show a contextual note in client mode.
+      isClientMode: isClientMode,
     );
 
     final settingsTab = SettingsTab(
@@ -301,8 +326,8 @@ class _MainShellState extends State<MainShell> {
       onMqttSettingsChanged: _onMqttSettingsChanged,
     );
 
-    // In client mode Energy and History tabs are omitted — the data only
-    // exists on the gateway device that holds the BLE connection.
+    // In client mode Energy and History stay on the gateway — that device
+    // is the one with BLE and local storage for those records.
     final List<Widget> tabScreens;
     final List<NavigationDestination> destinations;
 
@@ -429,7 +454,7 @@ class _MqttModeStrip extends StatelessWidget {
       return (AppColors.successSurface, AppColors.success,
           Icons.cloud_done_rounded, '$tag · MQTT connected');
     }
-    return (AppColors.errorSurface, AppColors.error, Icons.cloud_off_rounded,
-        '$tag · MQTT disconnected — check Settings');
+    return (AppColors.errorSurface, AppColors.error,
+        Icons.cloud_off_rounded, '$tag · MQTT disconnected — check Settings');
   }
 }

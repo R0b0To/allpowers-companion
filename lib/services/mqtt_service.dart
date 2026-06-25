@@ -8,7 +8,8 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 import '../models/mqtt_settings.dart';
 import '../models/power_station_status.dart';
 import '../utils/logger.dart';
-import '../models/automation_settings.dart';
+// Add import at top
+import '../models/automation_flow.dart';
 
 /// Manages the MQTT connection in both Gateway and Client modes.
 ///
@@ -64,8 +65,6 @@ final class MqttService extends ChangeNotifier {
   /// state when a command packet arrives from a client phone.
   void Function(String outlet, bool value)? onCommand;
 
-  /// configuration packet from the client phone.
-  void Function(AutomationSettings settings)? onConfigReceived;
 
   PowerStationStatus get remoteStatus => _remoteStatus;
   bool get bleConnectedRemote => _bleConnectedRemote;
@@ -86,6 +85,25 @@ final class MqttService extends ChangeNotifier {
       unawaited(_connect());
     }
   }
+
+
+  /// Called on both gateway and client when a flows update arrives from
+/// the other side. The handler is responsible for updating local state
+/// and storage; this service just delivers the parsed list.
+void Function(List<AutomationFlow> flows)? onFlowsReceived;
+
+/// Publishes the full flows list (retained, QoS 1) so the other side
+/// picks it up immediately on connect.
+void publishFlows(List<AutomationFlow> flows) {
+  if (!_isConnected) return;
+  if (_settings.mode == AppMode.standalone) return;
+  _publish(
+    _settings.flowsTopic,
+    jsonEncode(flows.map((f) => f.toJson()).toList()),
+    retain: true,
+  );
+  Log.i('MqttService', 'Flows published (${flows.length} flow(s))');
+}
 
   // ── Connect ───────────────────────────────────────────────────────────────
 
@@ -239,19 +257,16 @@ final class MqttService extends ChangeNotifier {
 
     switch (_settings.mode) {
       case AppMode.gateway:
-        // Subscribe to commands
-        final cmdTopic = '${_settings.commandTopic}/+';
-        c.subscribe(cmdTopic, MqttQos.atLeastOnce);
-        
-        // Subscribe to configuration changes
-        final configTopic = _settings.configTopic;
-        c.subscribe(configTopic, MqttQos.atLeastOnce);
-        
-        Log.i('MqttService', 'Gateway subscribed to $cmdTopic and $configTopic');
+  c.subscribe('${_settings.commandTopic}/+', MqttQos.atLeastOnce);
+  c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
+  Log.i('MqttService',
+      'Gateway subscribed to commands + flows');
 
-      case AppMode.client:
-        c.subscribe(_settings.statusTopic, MqttQos.atLeastOnce);
-        Log.i('MqttService', 'Client subscribed to ${_settings.statusTopic}');
+case AppMode.client:
+  c.subscribe(_settings.statusTopic, MqttQos.atLeastOnce);
+  c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
+  Log.i('MqttService',
+      'Client subscribed to status + flows');
 
       case AppMode.standalone:
         break;
@@ -261,28 +276,44 @@ final class MqttService extends ChangeNotifier {
   }
 
 
-   void _onMessages(List<MqttReceivedMessage<MqttMessage>> events) {
-    for (final event in events) {
-      final pub = event.payload as MqttPublishMessage;
-      final raw =
-          MqttPublishPayload.bytesToStringAsString(pub.payload.message);
-      try {
-        if (_settings.mode == AppMode.client &&
-            event.topic == _settings.statusTopic) {
-          _handleStatus(raw);
-        } else if (_settings.mode == AppMode.gateway) {
-          // Route Gateway incoming packets
-          if (event.topic == _settings.configTopic) {
-            _handleConfigSync(raw);
-          } else if (event.topic.startsWith(_settings.commandTopic)) {
-            _handleCommand(event.topic, raw);
-          }
-        }
-      } catch (e) {
-        Log.e('MqttService', 'Parse error [${event.topic}]', e);
+void _onMessages(List<MqttReceivedMessage<MqttMessage>> events) {
+  for (final event in events) {
+    final pub = event.payload as MqttPublishMessage;
+    final raw =
+        MqttPublishPayload.bytesToStringAsString(pub.payload.message);
+    try {
+      // Flows topic is shared — handled regardless of mode.
+      if (event.topic == _settings.flowsTopic) {
+        _handleFlowsSync(raw);
+        continue;
       }
+
+      if (_settings.mode == AppMode.client &&
+          event.topic == _settings.statusTopic) {
+        _handleStatus(raw);
+      } else if (_settings.mode == AppMode.gateway &&
+          event.topic.startsWith(_settings.commandTopic)) {
+        _handleCommand(event.topic, raw);
+      }
+    } catch (e) {
+      Log.e('MqttService', 'Parse error [${event.topic}]', e);
     }
   }
+}
+
+void _handleFlowsSync(String raw) {
+  try {
+    final list = jsonDecode(raw) as List<dynamic>;
+    final flows = list
+        .map((j) => AutomationFlow.tryFromJson(j as Map<String, dynamic>))
+        .whereType<AutomationFlow>()
+        .toList();
+    Log.i('MqttService', 'Flows received (${flows.length} flow(s))');
+    onFlowsReceived?.call(flows);
+  } catch (e) {
+    Log.e('MqttService', 'Failed to parse flows payload', e);
+  }
+}
 
   // ── Message handlers ──────────────────────────────────────────────────────
 
@@ -314,16 +345,6 @@ final class MqttService extends ChangeNotifier {
     onCommand?.call(outlet, value);
   }
 
-    void _handleConfigSync(String raw) {
-    try {
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      final config = AutomationSettingsJson.fromJson(j);
-      Log.i('MqttService', 'Config received from Client');
-      onConfigReceived?.call(config);
-    } catch (e) {
-      Log.e('MqttService', 'Failed to parse config sync payload', e);
-    }
-  }
 
   // ── Publish ───────────────────────────────────────────────────────────────
 
@@ -349,16 +370,7 @@ final class MqttService extends ChangeNotifier {
     );
   }
 
-  /// Uses [retain: true] so the gateway retrieves it even if it was offline/restarted.
-  void publishAutomationConfig(AutomationSettings settings) {
-    if (!_isConnected || _settings.mode != AppMode.client) return;
-    _publish(
-      _settings.configTopic,
-      jsonEncode(settings.toJson()),
-      retain: true,
-    );
-    Log.i('MqttService', 'Automation config published to gateway');
-  }
+
 
   /// Client: send an outlet-toggle command to the gateway.
   void sendCommand(String outlet, bool value) {
