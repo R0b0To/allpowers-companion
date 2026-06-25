@@ -1,7 +1,7 @@
 name: ap_companion
 description: "An unofficial Flutter client for ALLPOWERS batteries"
 publish_to: 'none'
-version: 0.9.6+1
+version: 0.9.7+1
 
 environment:
   sdk: ^3.12.0
