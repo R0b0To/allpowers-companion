@@ -9,6 +9,8 @@ import '../models/energy_log_entry.dart';
 import '../models/mqtt_settings.dart';
 import '../utils/logger.dart';
 
+import '../models/automation_flow.dart';
+
 /// Typed, error-safe wrapper around [SharedPreferences].
 ///
 /// - All keys are private constants — no raw strings leak into business logic.
@@ -38,6 +40,7 @@ final class StorageService {
   static const _keyChargingTriggered = 'charging_triggered';
   static const _keyAutomationHistory = 'automation_history';
   static const _keyEnergyLog = 'energy_log';
+  static const _keyFlows = 'automation_flows';
 
   // ── Keys — MQTT ──────────────────────────────────────────────────────────
   static const _keyMqttMode = 'mqtt_mode';
@@ -95,6 +98,65 @@ final class StorageService {
     }
   }
 
+// ── Automation flows ──────────────────────────────────────────────────────────
+
+Future<List<AutomationFlow>> loadFlows() async {
+  try {
+    final prefs = await _getPrefs();
+    final raw = prefs.getStringList(_keyFlows) ?? [];
+    final flows = <AutomationFlow>[];
+    for (final s in raw) {
+      try {
+        final f = AutomationFlow.tryFromJson(
+            jsonDecode(s) as Map<String, dynamic>);
+        if (f != null) flows.add(f);
+      } catch (_) {}
+    }
+    return flows;
+  } catch (e) {
+    Log.e('StorageService', 'loadFlows failed', e);
+    return [];
+  }
+}
+
+Future<void> saveFlows(List<AutomationFlow> flows) async {
+  try {
+    final prefs = await _getPrefs();
+    await prefs.setStringList(
+      _keyFlows,
+      flows.map((f) => jsonEncode(f.toJson())).toList(),
+    );
+  } catch (e) {
+    Log.e('StorageService', 'saveFlows failed', e);
+  }
+}
+
+// ── Per-flow trigger persistence ──────────────────────────────────────────────
+
+Future<bool> getFlowTriggered(String flowId) async {
+  try {
+    final prefs = await _getPrefs();
+    return prefs.getBool('flow_triggered_$flowId') ?? false;
+  } catch (e) {
+    return false;
+  }
+}
+
+Future<void> setFlowTriggered(String flowId, bool value) async {
+  try {
+    final prefs = await _getPrefs();
+    await prefs.setBool('flow_triggered_$flowId', value);
+  } catch (e) {
+    Log.e('StorageService', 'setFlowTriggered failed', e);
+  }
+}
+
+Future<void> clearFlowTriggered(String flowId) async {
+  try {
+    final prefs = await _getPrefs();
+    await prefs.remove('flow_triggered_$flowId');
+  } catch (e) {}
+}
   // ── Automation settings ───────────────────────────────────────────────────
 
   Future<AutomationSettings> loadAutomationSettings() async {
