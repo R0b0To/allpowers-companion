@@ -30,9 +30,12 @@ class HistoryTab extends StatelessWidget {
   }
 
   Widget _buildBody(BuildContext context) {
+    final theme = Theme.of(context);
     if (!history.isLoaded) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppColors.teal),
+      return Center(
+        child: CircularProgressIndicator(
+          color: theme.colorScheme.primary,
+        ),
       );
     }
 
@@ -55,9 +58,9 @@ class HistoryTab extends StatelessWidget {
                   IconButton(
                     onPressed: () => _confirmClear(context),
                     tooltip: strings.t('clear_history'),
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.delete_outline_rounded,
-                      color: AppColors.textTertiary,
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
                     ),
                   ),
               ],
@@ -73,10 +76,10 @@ class HistoryTab extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.history_rounded,
                       size: 48,
-                      color: AppColors.textTertiary,
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     Text(
@@ -111,11 +114,12 @@ class HistoryTab extends StatelessWidget {
   }
 
   Future<void> _confirmClear(BuildContext context) async {
+    final theme = Theme.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: AppRadius.mdBR),
+        // Shape and background removed to let this card inherit the globally 
+        // registered dialogTheme configuration inside theme.dart automatically
         title: Text(strings.t('clear_history'), style: AppTypography.headingMd),
         content: Text(strings.t('clear_history_confirm'), style: AppTypography.bodyMd),
         actions: [
@@ -123,14 +127,18 @@ class HistoryTab extends StatelessWidget {
             onPressed: () => Navigator.of(context).pop(false),
             child: Text(
               strings.t('cancel'),
-              style: AppTypography.headingSm.copyWith(color: AppColors.textSecondary),
+              style: AppTypography.headingSm.copyWith(
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+              ),
             ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
             child: Text(
               strings.t('clear_history'),
-              style: AppTypography.headingSm.copyWith(color: AppColors.error),
+              style: AppTypography.headingSm.copyWith(
+                color: theme.colorScheme.error,
+              ),
             ),
           ),
         ],

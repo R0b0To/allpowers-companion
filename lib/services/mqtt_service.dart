@@ -407,27 +407,34 @@ void _handleFlowsSync(String raw) {
     c.onFailedConnectionAttempt = (_) {};
 
     try {
-      final connMsg = MqttConnectMessage()
-          .withClientIdentifier(testId)
-          .startClean();
-      if (s.username.isNotEmpty) {
-        connMsg.authenticateAs(s.username, s.password);
-      }
-      c.connectionMessage = connMsg;
+  final connMsg = MqttConnectMessage()
+      .withClientIdentifier(testId)
+      .startClean();
+  if (s.username.isNotEmpty) {
+    connMsg.authenticateAs(s.username, s.password);
+  }
+  c.connectionMessage = connMsg;
 
-      final status =
-          await c.connect().timeout(const Duration(seconds: 10));
-      c.disconnect();
+  final status =
+      await c.connect().timeout(const Duration(seconds: 10));
 
-      if (status?.state == MqttConnectionState.connected) {
-        return 'Connected to ${s.brokerHost}:${s.port} ✓';
-      }
-      return 'Connection failed — broker returned: '
-          '${status?.returnCode?.name ?? 'no response'}';
-    } catch (e) {
-      c.disconnect();
-      return 'Error: ${_friendlyError(e)}';
-    }
+  // 1. Evaluate success BEFORE disconnecting (since disconnect mutates the state)
+  final isSuccess = status?.state == MqttConnectionState.connected ||
+      status?.returnCode == MqttConnectReturnCode.connectionAccepted;
+
+  // 2. Safely close the temporary handshake connection
+  c.disconnect();
+
+  if (isSuccess) {
+    return 'Connected to ${s.brokerHost}:${s.port} ✓';
+  }
+  
+  return 'Connection failed — broker returned: '
+      '${status?.returnCode?.name ?? 'no response'}';
+} catch (e) {
+  c.disconnect();
+  return 'Error: ${_friendlyError(e)}';
+}
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

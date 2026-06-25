@@ -63,6 +63,7 @@ class _BluetoothOffView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xxxl),
@@ -73,13 +74,13 @@ class _BluetoothOffView extends StatelessWidget {
               width: 80,
               height: 80,
               decoration: BoxDecoration(
-                color: AppColors.surfaceElevated,
+                color: theme.colorScheme.surfaceContainer,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.bluetooth_disabled_rounded,
                 size: 40,
-                color: AppColors.textTertiary,
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
@@ -110,6 +111,7 @@ class _ConnectingView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xxxl),
@@ -121,7 +123,7 @@ class _ConnectingView extends StatelessWidget {
               height: 56,
               child: CircularProgressIndicator(
                 strokeWidth: 3,
-                color: AppColors.teal,
+                color: theme.colorScheme.primary,
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
@@ -136,8 +138,8 @@ class _ConnectingView extends StatelessWidget {
               icon: const Icon(Icons.close_rounded, size: 18),
               label: Text(strings.t('cancel_forget')),
               style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.error,
-                side: const BorderSide(color: AppColors.error),
+                foregroundColor: theme.colorScheme.error,
+                side: BorderSide(color: theme.colorScheme.error),
               ),
             ),
           ],
@@ -162,6 +164,7 @@ class _ScanView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return CustomScrollView(
       slivers: [
         SliverToBoxAdapter(
@@ -193,13 +196,13 @@ class _ScanView extends StatelessWidget {
                     icon: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 200),
                       child: ble.isScanning
-                          ? const SizedBox(
-                              key: ValueKey('spinner'),
+                          ? SizedBox(
+                              key: const ValueKey('spinner'),
                               width: 16,
                               height: 16,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                color: AppColors.background,
+                                color: theme.colorScheme.onPrimary,
                               ),
                             )
                           : const Icon(
@@ -229,10 +232,10 @@ class _ScanView extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.radar_rounded,
                       size: 48,
-                      color: AppColors.textTertiary,
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     Text(
@@ -292,11 +295,12 @@ class _DeviceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: theme.colorScheme.surfaceContainerLow,
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: theme.colorScheme.outline),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(
@@ -307,19 +311,23 @@ class _DeviceTile extends StatelessWidget {
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: AppColors.tealSurface,
+            color: theme.colorScheme.primaryContainer,
             borderRadius: AppRadius.smBR,
           ),
-          child: const Icon(
+          child: Icon(
             Icons.battery_charging_full_rounded,
-            color: AppColors.teal,
+            color: theme.colorScheme.primary,
             size: 20,
           ),
         ),
         title: Text(name, style: AppTypography.headingSm),
         subtitle: Row(
           children: [
-            Icon(_signalIcon, size: 12, color: AppColors.textTertiary),
+            Icon(
+              _signalIcon, 
+              size: 12, 
+              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+            ),
             const SizedBox(width: 4),
             Text('$rssi dBm', style: AppTypography.labelSm),
           ],
@@ -327,13 +335,16 @@ class _DeviceTile extends StatelessWidget {
         trailing: FilledButton(
           onPressed: onConnect,
           style: FilledButton.styleFrom(
-            backgroundColor: AppColors.tealSurface,
-            foregroundColor: AppColors.teal,
+            backgroundColor: theme.colorScheme.primaryContainer,
+            foregroundColor: theme.colorScheme.primary,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             minimumSize: Size.zero,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          child: Text('Connect', style: AppTypography.labelMd.copyWith(color: AppColors.teal)),
+          child: Text(
+            'Connect', 
+            style: AppTypography.labelMd.copyWith(color: theme.colorScheme.primary),
+          ),
         ),
       ),
     );
@@ -456,6 +467,7 @@ class _ConnectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Row(
       children: [
         Container(
@@ -478,8 +490,8 @@ class _ConnectionHeader extends StatelessWidget {
           onPressed: onForget,
           tooltip: 'Forget device',
           style: IconButton.styleFrom(
-            backgroundColor: AppColors.errorSurface,
-            foregroundColor: AppColors.error,
+            backgroundColor: theme.colorScheme.errorContainer,
+            foregroundColor: theme.colorScheme.onErrorContainer,
           ),
           icon: const Icon(Icons.link_off_rounded, size: 18),
         ),
@@ -494,6 +506,7 @@ class _BatteryRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final level = status.batteryLevel;
     final color = AppColors.batteryColor(level);
     final remainingTime = status.formattedRemainingTime;
@@ -507,12 +520,12 @@ class _BatteryRing extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // Track ring
+              // Track ring (uses tone-based surfaceContainer)
               SizedBox.expand(
                 child: CircularProgressIndicator(
                   value: 1,
                   strokeWidth: 12,
-                  color: AppColors.surfaceElevated,
+                  color: theme.colorScheme.surfaceContainer,
                 ),
               ),
               // Value ring
@@ -557,7 +570,7 @@ class _BatteryRing extends StatelessWidget {
                     Text(
                       status.isCharging ? '$remainingTime to full' : '$remainingTime left',
                       style: AppTypography.labelSm.copyWith(
-                        color: AppColors.textTertiary,
+                        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
                       ),
                     ),
                   ],
@@ -570,6 +583,7 @@ class _BatteryRing extends StatelessWidget {
     );
   }
 }
+
 class _MetricsRow extends StatelessWidget {
   const _MetricsRow({required this.status, required this.strings});
   final PowerStationStatus status;

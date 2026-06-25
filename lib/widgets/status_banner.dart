@@ -19,11 +19,31 @@ class StatusBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    // Maps variants directly to M3 ColorScheme properties for standard systems,
+    // and falls back to semantic telemetry values for custom diagnostic states.
     final (color, surface, icon) = switch (variant) {
-      BannerVariant.info    => (AppColors.info, AppColors.infoSurface, Icons.info_outline),
-      BannerVariant.success => (AppColors.success, AppColors.successSurface, Icons.check_circle_outline),
-      BannerVariant.warning => (AppColors.warning, AppColors.warningSurface, Icons.warning_amber_outlined),
-      BannerVariant.error   => (AppColors.error, AppColors.errorSurface, Icons.error_outline),
+      BannerVariant.info => (
+          AppColors.info, 
+          AppColors.infoSurface, 
+          Icons.info_outline,
+        ),
+      BannerVariant.success => (
+          AppColors.success, 
+          AppColors.successSurface, 
+          Icons.check_circle_outline,
+        ),
+      BannerVariant.warning => (
+          AppColors.warning, 
+          AppColors.warningSurface, 
+          Icons.warning_amber_outlined,
+        ),
+      BannerVariant.error => (
+          theme.colorScheme.error, 
+          theme.colorScheme.errorContainer, 
+          Icons.error_outline,
+        ),
     };
 
     return Container(
@@ -51,7 +71,11 @@ class StatusBanner extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
             GestureDetector(
               onTap: onDismiss,
-              child: Icon(Icons.close, size: 16, color: color.withOpacity(0.7)),
+              child: Icon(
+                Icons.close, 
+                size: 16, 
+                color: color.withOpacity(0.7),
+              ),
             ),
           ],
         ],

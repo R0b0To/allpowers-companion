@@ -10,7 +10,7 @@ import '../widgets/toggle_card.dart';
 /// Control screen shown when the app is running in [AppMode.client].
 ///
 /// All data comes from the MQTT broker (via [MqttService.remoteStatus]) rather
-/// than a direct BLE connection.  Outlet-toggle taps publish MQTT commands
+/// than a direct BLE connection. Outlet-toggle taps publish MQTT commands
 /// which the gateway executes over BLE.
 ///
 /// The three nested states mirror [ControlTab]'s pattern:
@@ -31,11 +31,11 @@ class MqttClientTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: mqtt,
-      builder: (context, _) => SafeArea(child: _buildBody()),
+      builder: (context, _) => SafeArea(child: _buildBody(context)),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody(BuildContext context) {
     if (mqtt.isConnecting) {
       return _MqttConnectingView(strings: strings);
     }
@@ -57,21 +57,27 @@ class _MqttConnectingView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xxxl),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const SizedBox(
+            SizedBox(
               width: 56,
               height: 56,
               child: CircularProgressIndicator(
-                  strokeWidth: 3, color: AppColors.teal),
+                strokeWidth: 3, 
+                color: theme.colorScheme.primary,
+              ),
             ),
             const SizedBox(height: AppSpacing.xxl),
-            Text(strings.t('mqtt_connecting'),
-                style: AppTypography.headingMd, textAlign: TextAlign.center),
+            Text(
+              strings.t('mqtt_connecting'),
+              style: AppTypography.headingMd, 
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
@@ -88,6 +94,7 @@ class _MqttOfflineView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xxxl),
@@ -97,20 +104,25 @@ class _MqttOfflineView extends StatelessWidget {
             Container(
               width: 80,
               height: 80,
-              decoration: const BoxDecoration(
-                color: AppColors.surfaceElevated,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainer,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.cloud_off_rounded,
-                  size: 40, color: AppColors.textTertiary),
+              child: Icon(
+                Icons.cloud_off_rounded,
+                size: 40, 
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+              ),
             ),
             const SizedBox(height: AppSpacing.xxl),
-            Text(strings.t('mqtt_broker_offline'),
-                style: AppTypography.headingLg, textAlign: TextAlign.center),
+            Text(
+              strings.t('mqtt_broker_offline'),
+              style: AppTypography.headingLg, 
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              mqtt.lastError ??
-                  strings.t('mqtt_check_settings'),
+              mqtt.lastError ?? strings.t('mqtt_check_settings'),
               style: AppTypography.bodyMd,
               textAlign: TextAlign.center,
             ),
@@ -119,28 +131,38 @@ class _MqttOfflineView extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(AppSpacing.md),
                 decoration: BoxDecoration(
-                  color: AppColors.errorSurface,
+                  color: theme.colorScheme.errorContainer,
                   borderRadius: AppRadius.mdBR,
                   border: Border.all(
-                      color: AppColors.error.withOpacity(0.3)),
+                    color: theme.colorScheme.error.withOpacity(0.3),
+                  ),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.error_outline,
-                        size: 16, color: AppColors.error),
+                    Icon(
+                      Icons.error_outline,
+                      size: 16, 
+                      color: theme.colorScheme.error,
+                    ),
                     const SizedBox(width: AppSpacing.sm),
                     Expanded(
-                      child: Text(mqtt.lastError!,
-                          style: AppTypography.bodySm
-                              .copyWith(color: AppColors.error)),
+                      child: Text(
+                        mqtt.lastError!,
+                        style: AppTypography.bodySm.copyWith(
+                          color: theme.colorScheme.error,
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
             ],
             const SizedBox(height: AppSpacing.xl),
-            Text(strings.t('mqtt_configure_hint'),
-                style: AppTypography.labelSm, textAlign: TextAlign.center),
+            Text(
+              strings.t('mqtt_configure_hint'),
+              style: AppTypography.labelSm, 
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
@@ -157,21 +179,25 @@ class _GatewayOfflineView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xxxl),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // MQTT connected badge
+            // MQTT connected badge using theme status mappings
             Container(
               padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+                horizontal: AppSpacing.md, 
+                vertical: AppSpacing.xs,
+              ),
               decoration: BoxDecoration(
                 color: AppColors.successSurface,
                 borderRadius: AppRadius.xsBR,
                 border: Border.all(
-                    color: AppColors.success.withOpacity(0.3)),
+                  color: AppColors.success.withOpacity(0.3),
+                ),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -185,9 +211,12 @@ class _GatewayOfflineView extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: AppSpacing.xs),
-                  Text(strings.t('mqtt_connected'),
-                      style: AppTypography.labelSm
-                          .copyWith(color: AppColors.success)),
+                  Text(
+                    strings.t('mqtt_connected'),
+                    style: AppTypography.labelSm.copyWith(
+                      color: AppColors.success,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -195,19 +224,28 @@ class _GatewayOfflineView extends StatelessWidget {
             Container(
               width: 80,
               height: 80,
-              decoration: const BoxDecoration(
-                color: AppColors.surfaceElevated,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainer,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.bluetooth_disabled_rounded,
-                  size: 40, color: AppColors.textTertiary),
+              child: Icon(
+                Icons.bluetooth_disabled_rounded,
+                size: 40, 
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+              ),
             ),
             const SizedBox(height: AppSpacing.xxl),
-            Text(strings.t('mqtt_gateway_ble_offline'),
-                style: AppTypography.headingLg, textAlign: TextAlign.center),
+            Text(
+              strings.t('mqtt_gateway_ble_offline'),
+              style: AppTypography.headingLg, 
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: AppSpacing.sm),
-            Text(strings.t('mqtt_gateway_ble_offline_body'),
-                style: AppTypography.bodyMd, textAlign: TextAlign.center),
+            Text(
+              strings.t('mqtt_gateway_ble_offline_body'),
+              style: AppTypography.bodyMd, 
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
@@ -228,28 +266,25 @@ class _RemoteStationView extends StatelessWidget {
 
     return CustomScrollView(
       slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg,
-              AppSpacing.xl,
-              AppSpacing.lg,
-              0,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _RemoteHeader(mqtt: mqtt, strings: strings),
-                const SizedBox(height: AppSpacing.xxl),
-                _RemoteBatteryRing(status: status),
-                const SizedBox(height: AppSpacing.xxl),
-                _RemoteMetricsRow(status: status, strings: strings),
-                const SizedBox(height: AppSpacing.xl),
-                _RemoteOutletSection(
-                    mqtt: mqtt, status: status, strings: strings),
-                const SizedBox(height: AppSpacing.xxl),
-              ],
-            ),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.lg,
+            vertical: AppSpacing.xl,
+          ),
+          sliver: SliverList(
+            delegate: SliverChildListDelegate([
+              _RemoteHeader(mqtt: mqtt, strings: strings),
+              const SizedBox(height: AppSpacing.xxl),
+              _RemoteBatteryRing(status: status),
+              const SizedBox(height: AppSpacing.xxl),
+              _RemoteMetricsRow(status: status, strings: strings),
+              const SizedBox(height: AppSpacing.xl),
+              _RemoteOutletSection(
+                mqtt: mqtt, 
+                status: status, 
+                strings: strings,
+              ),
+            ]),
           ),
         ),
       ],
@@ -275,27 +310,34 @@ class _RemoteHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Row(
       children: [
-        // MQTT link indicator
+        // MQTT link indicator using primaryContainer token (tealSurface)
         Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.sm, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 4),
           decoration: BoxDecoration(
-            color: AppColors.tealSurface,
+            color: theme.colorScheme.primaryContainer,
             borderRadius: AppRadius.xsBR,
-            border:
-                Border.all(color: AppColors.teal.withOpacity(0.4)),
+            border: Border.all(
+              color: theme.colorScheme.primary.withOpacity(0.4),
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.cloud_done_rounded,
-                  size: 12, color: AppColors.teal),
+              Icon(
+                Icons.cloud_done_rounded,
+                size: 12, 
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(width: 4),
-              Text(strings.t('mqtt_remote_label'),
-                  style: AppTypography.labelSm
-                      .copyWith(color: AppColors.teal)),
+              Text(
+                strings.t('mqtt_remote_label'),
+                style: AppTypography.labelSm.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
             ],
           ),
         ),
@@ -308,8 +350,10 @@ class _RemoteHeader extends StatelessWidget {
           ),
         ),
         if (mqtt.lastRemoteUpdate != null)
-          Text(_formatLastUpdate(),
-              style: AppTypography.labelSm),
+          Text(
+            _formatLastUpdate(),
+            style: AppTypography.labelSm,
+          ),
       ],
     );
   }
@@ -323,6 +367,7 @@ class _RemoteBatteryRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final level = status.batteryLevel;
     final color = AppColors.batteryColor(level);
     final remaining = status.formattedRemainingTime;
@@ -336,11 +381,12 @@ class _RemoteBatteryRing extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
+              // Uses tone-based background track container
               SizedBox.expand(
                 child: CircularProgressIndicator(
                   value: 1,
                   strokeWidth: 12,
-                  color: AppColors.surfaceElevated,
+                  color: theme.colorScheme.surfaceContainer,
                 ),
               ),
               SizedBox.expand(
@@ -355,18 +401,25 @@ class _RemoteBatteryRing extends StatelessWidget {
               Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text('$level%',
-                      style:
-                          AppTypography.monoLg.copyWith(color: color)),
+                  Text(
+                    '$level%',
+                    style: AppTypography.monoLg.copyWith(color: color),
+                  ),
                   if (status.isCharging) ...[
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.bolt_rounded,
-                            size: 12, color: AppColors.success),
-                        Text('Charging',
-                            style: AppTypography.labelSm.copyWith(
-                                color: AppColors.success)),
+                        const Icon(
+                          Icons.bolt_rounded,
+                          size: 12, 
+                          color: AppColors.success,
+                        ),
+                        Text(
+                          'Charging',
+                          style: AppTypography.labelSm.copyWith(
+                            color: AppColors.success,
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -376,8 +429,9 @@ class _RemoteBatteryRing extends StatelessWidget {
                       status.isCharging
                           ? '$remaining to full'
                           : '$remaining left',
-                      style: AppTypography.labelSm
-                          .copyWith(color: AppColors.textTertiary),
+                      style: AppTypography.labelSm.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                      ),
                     ),
                   ],
                 ],
@@ -393,8 +447,7 @@ class _RemoteBatteryRing extends StatelessWidget {
 // ── Metrics ───────────────────────────────────────────────────────────────────
 
 class _RemoteMetricsRow extends StatelessWidget {
-  const _RemoteMetricsRow(
-      {required this.status, required this.strings});
+  const _RemoteMetricsRow({required this.status, required this.strings});
   final PowerStationStatus status;
   final AppStrings strings;
 
@@ -443,25 +496,30 @@ class _RemoteOutletSection extends StatelessWidget {
       children: [
         Text(strings.t('controls'), style: AppTypography.labelLg),
         const SizedBox(height: AppSpacing.sm),
-        // Latency note
+        // Information block
         Container(
           padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+            horizontal: AppSpacing.sm, 
+            vertical: AppSpacing.xs,
+          ),
           decoration: BoxDecoration(
             color: AppColors.infoSurface,
             borderRadius: AppRadius.xsBR,
-            border:
-                Border.all(color: AppColors.info.withOpacity(0.25)),
+            border: Border.all(
+              color: AppColors.info.withOpacity(0.25),
+            ),
           ),
           child: Row(
             children: [
-              const Icon(Icons.info_outline,
-                  size: 12, color: AppColors.info),
+              const Icon(
+                Icons.info_outline,
+                size: 12, 
+                color: AppColors.info,
+              ),
               const SizedBox(width: AppSpacing.xs),
               Text(
                 strings.t('mqtt_command_latency_note'),
-                style: AppTypography.labelSm
-                    .copyWith(color: AppColors.info),
+                style: AppTypography.labelSm.copyWith(color: AppColors.info),
               ),
             ],
           ),

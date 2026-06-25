@@ -119,17 +119,65 @@ abstract final class AppTheme {
       useMaterial3: true,
       brightness: Brightness.dark,
       scaffoldBackgroundColor: AppColors.background,
+
+      // Bind typography tokens to global Material 3 widgets
+      textTheme: TextTheme(
+        displayLarge: AppTypography.displayLg,
+        displayMedium: AppTypography.displayMd,
+        displaySmall: AppTypography.displaySm,
+        headlineLarge: AppTypography.headingLg,
+        headlineMedium: AppTypography.headingMd,
+        headlineSmall: AppTypography.headingSm,
+        bodyLarge: AppTypography.bodyLg,
+        bodyMedium: AppTypography.bodyMd,
+        bodySmall: AppTypography.bodySm,
+        labelLarge: AppTypography.labelLg,
+        labelMedium: AppTypography.labelMd,
+        labelSmall: AppTypography.labelSm,
+      ),
+
+      // Alignment with M3 Tone-Based Surface roles (Android 15 & 16 compatible)
       colorScheme: const ColorScheme.dark(
         primary: AppColors.teal,
         onPrimary: AppColors.background,
+        primaryContainer: AppColors.tealSurface,
+        onPrimaryContainer: AppColors.teal,
         secondary: AppColors.teal,
-        surface: AppColors.surface,
+        onSecondary: AppColors.background,
+        
+        // New Surface Tones (replacing deprecated elevation-based overlays)
+        surface: AppColors.background,
+        surfaceDim: AppColors.background,
+        surfaceBright: AppColors.surfaceElevated,
+        surfaceContainerLowest: AppColors.background,
+        surfaceContainerLow: AppColors.surface,
+        surfaceContainer: AppColors.surfaceElevated,
+        surfaceContainerHigh: AppColors.surfaceHighlight,
+        surfaceContainerHighest: AppColors.border,
+        
         onSurface: AppColors.textPrimary,
-        error: AppColors.error,
+        onSurfaceVariant: AppColors.textSecondary,
         outline: AppColors.border,
+        outlineVariant: AppColors.borderSubtle,
+        
+        error: AppColors.error,
+        onError: AppColors.background,
+        errorContainer: AppColors.errorSurface,
+        onErrorContainer: AppColors.error,
       ),
+
+      // Explicit styles for native Top AppBars
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        iconTheme: IconThemeData(color: AppColors.textPrimary),
+        actionsIconTheme: IconThemeData(color: AppColors.textPrimary),
+        centerTitle: false,
+      ),
+
       cardTheme: CardThemeData(
-        color: AppColors.surface,
+        color: AppColors.surface, // Matches surfaceContainerLow
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: AppRadius.lgBR,
@@ -137,23 +185,47 @@ abstract final class AppTheme {
         ),
         margin: EdgeInsets.zero,
       ),
+
+      // Explicit style for standard Dialog components
+      dialogTheme: DialogThemeData(
+        backgroundColor: AppColors.surfaceElevated, // Matches surfaceContainer
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: AppRadius.lgBR,
+          side: const BorderSide(color: AppColors.border, width: 1),
+        ),
+      ),
+
+      // Explicit style for Bottom Sheets
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: AppColors.surfaceElevated,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+        ),
+        clipBehavior: Clip.antiAliasWithSaveLayer,
+      ),
+
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) return AppColors.background;
+          if (states.contains(WidgetState.disabled)) return AppColors.textDisabled;
           return AppColors.textTertiary;
         }),
         trackColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) return AppColors.teal;
-          return AppColors.surface;
+          if (states.contains(WidgetState.disabled)) return AppColors.surface;
+          return AppColors.surfaceElevated;
         }),
         trackOutlineColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) return Colors.transparent;
           return AppColors.border;
         }),
       ),
+
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.background,
+        fillColor: AppColors.surface, // Using surfaceContainerLow for contrasting fields
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         labelStyle: AppTypography.bodyMd,
         hintStyle: AppTypography.bodyMd.copyWith(color: AppColors.textDisabled),
@@ -178,8 +250,9 @@ abstract final class AppTheme {
           borderSide: const BorderSide(color: AppColors.error, width: 1.5),
         ),
       ),
+
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: AppColors.surface,
+        backgroundColor: AppColors.surface, 
         indicatorColor: AppColors.tealSurface,
         iconTheme: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
@@ -197,6 +270,19 @@ abstract final class AppTheme {
         surfaceTintColor: Colors.transparent,
         shadowColor: Colors.transparent,
       ),
+
+      // M3 Prominent Actions Theme
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: AppColors.teal,
+          foregroundColor: AppColors.background,
+          textStyle: AppTypography.headingSm,
+          shape: RoundedRectangleBorder(borderRadius: AppRadius.mdBR),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          elevation: 0,
+        ),
+      ),
+
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.teal,
@@ -207,6 +293,7 @@ abstract final class AppTheme {
           elevation: 0,
         ),
       ),
+
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: AppColors.teal,
@@ -216,6 +303,7 @@ abstract final class AppTheme {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
         ),
       ),
+
       snackBarTheme: SnackBarThemeData(
         backgroundColor: AppColors.surfaceElevated,
         contentTextStyle: AppTypography.bodyLg,
@@ -223,11 +311,13 @@ abstract final class AppTheme {
         behavior: SnackBarBehavior.floating,
         elevation: 0,
       ),
+
       dividerTheme: const DividerThemeData(
         color: AppColors.border,
         thickness: 1,
         space: 0,
       ),
+      
       iconTheme: const IconThemeData(color: AppColors.textSecondary, size: 20),
     );
   }
@@ -244,13 +334,19 @@ abstract final class AppTheme {
     );
   }
 
-  /// Applies transparent system overlay for edge-to-edge rendering.
+  /// Configures transparent system overlay for edge-to-edge drawing.
   static void applySystemOverlay() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: AppColors.surface,
+      statusBarBrightness: Brightness.dark,
+      
+      // Kept transparent so the OS permits window-underneath drawing
+      systemNavigationBarColor: Colors.transparent,
       systemNavigationBarIconBrightness: Brightness.light,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemNavigationBarContrastEnforced: false,
     ));
   }
 }

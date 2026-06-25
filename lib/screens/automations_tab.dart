@@ -29,23 +29,27 @@ class AutomationsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: AppColors.background,
+      // Let the Scaffold fall back to the custom background configured globally
       body: SafeArea(
         child: CustomScrollView(
           slivers: [
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.lg,
-                    AppSpacing.xl,
-                    AppSpacing.lg,
-                    AppSpacing.md),
+                  AppSpacing.lg,
+                  AppSpacing.xl,
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(strings.t('tab_automations'),
-                        style: AppTypography.displaySm),
+                    Text(
+                      strings.t('tab_automations'),
+                      style: AppTypography.displaySm,
+                    ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
                       'Custom sequences triggered by battery events.',
@@ -53,32 +57,40 @@ class AutomationsTab extends StatelessWidget {
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     if (isClientMode) ...[
-  const SizedBox(height: AppSpacing.sm),
-  Container(
-    padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-    decoration: BoxDecoration(
-      color: AppColors.infoSurface,
-      borderRadius: AppRadius.mdBR,
-      border: Border.all(color: AppColors.info.withOpacity(0.3)),
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.sync_rounded,
-            size: 14, color: AppColors.info),
-        const SizedBox(width: AppSpacing.sm),
-        Expanded(
-          child: Text(
-            'Automations sync to the gateway and run there. '
-            'Changes publish automatically when connected.',
-            style: AppTypography.labelSm
-                .copyWith(color: AppColors.info),
-          ),
-        ),
-      ],
-    ),
-  ),
-],
+                      const SizedBox(height: AppSpacing.sm),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md, 
+                          vertical: AppSpacing.sm,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.infoSurface,
+                          borderRadius: AppRadius.mdBR,
+                          border: Border.all(
+                            color: AppColors.info.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.sync_rounded,
+                              size: 14, 
+                              color: AppColors.info,
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Expanded(
+                              child: Text(
+                                'Automations sync to the gateway and run there. '
+                                'Changes publish automatically when connected.',
+                                style: AppTypography.labelSm.copyWith(
+                                  color: AppColors.info,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -94,7 +106,11 @@ class AutomationsTab extends StatelessWidget {
             else
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.xxl),
+                  AppSpacing.lg, 
+                  0, 
+                  AppSpacing.lg, 
+                  AppSpacing.xxl,
+                ),
                 sliver: SliverList.separated(
                   itemCount: flows.length,
                   separatorBuilder: (_, __) =>
@@ -114,8 +130,9 @@ class AutomationsTab extends StatelessWidget {
           ? null
           : FloatingActionButton(
               onPressed: () => _openEditor(context, null),
-              backgroundColor: AppColors.teal,
-              foregroundColor: AppColors.background,
+              // Leverages theme color scheme mapping
+              backgroundColor: theme.colorScheme.primary,
+              foregroundColor: theme.colorScheme.onPrimary,
               tooltip: 'New automation',
               child: const Icon(Icons.add_rounded),
             ),
@@ -152,24 +169,34 @@ class AutomationsTab extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: AppRadius.mdBR),
-        title: Text('Delete "${flow.name}"?',
-            style: AppTypography.headingMd),
-        content: Text('This automation will be permanently removed.',
-            style: AppTypography.bodyMd),
+        // Removed custom shape and color parameters because they are now
+        // globally applied and resolved via your dark ThemeData.dialogTheme
+        title: Text(
+          'Delete "${flow.name}"?',
+          style: AppTypography.headingMd,
+        ),
+        content: Text(
+          'This automation will be permanently removed.',
+          style: AppTypography.bodyMd,
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text('Cancel',
-                style: AppTypography.headingSm
-                    .copyWith(color: AppColors.textSecondary)),
+            child: Text(
+              'Cancel',
+              style: AppTypography.headingSm.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.7),
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text('Delete',
-                style: AppTypography.headingSm
-                    .copyWith(color: AppColors.error)),
+            child: Text(
+              'Delete',
+              style: AppTypography.headingSm.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
           ),
         ],
       ),
@@ -217,6 +244,7 @@ class _FlowCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Dismissible(
       key: ValueKey(flow.id),
       direction: DismissDirection.endToStart,
@@ -224,15 +252,17 @@ class _FlowCard extends StatelessWidget {
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: AppSpacing.lg),
         decoration: BoxDecoration(
-          color: AppColors.errorSurface,
+          color: theme.colorScheme.errorContainer,
           borderRadius: AppRadius.lgBR,
         ),
-        child:
-            const Icon(Icons.delete_outline_rounded, color: AppColors.error),
+        child: Icon(
+          Icons.delete_outline_rounded, 
+          color: theme.colorScheme.onErrorContainer,
+        ),
       ),
       confirmDismiss: (_) async {
         onDelete();
-        return false; // we handle list update ourselves
+        return false; // Handle state modifications locally
       },
       child: InkWell(
         onTap: onTap,
@@ -241,12 +271,12 @@ class _FlowCard extends StatelessWidget {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.all(AppSpacing.lg),
           decoration: BoxDecoration(
-            color: AppColors.surface,
+            color: theme.colorScheme.surfaceContainerLow,
             borderRadius: AppRadius.lgBR,
             border: Border.all(
               color: flow.enabled
-                  ? AppColors.teal.withOpacity(0.35)
-                  : AppColors.border,
+                  ? theme.colorScheme.primary.withOpacity(0.35)
+                  : theme.colorScheme.outline,
               width: flow.enabled ? 1.5 : 1,
             ),
           ),
@@ -259,8 +289,8 @@ class _FlowCard extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: flow.enabled
-                      ? AppColors.teal
-                      : AppColors.textDisabled,
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurfaceVariant.withOpacity(0.3),
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -270,7 +300,12 @@ class _FlowCard extends StatelessWidget {
                   children: [
                     Text(flow.name, style: AppTypography.headingSm),
                     const SizedBox(height: 2),
-                    Text(_triggerLine, style: AppTypography.bodySm),
+                    Text(
+                      _triggerLine, 
+                      style: AppTypography.bodySm.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                      ),
+                    ),
                     const SizedBox(height: AppSpacing.xs),
                     _StepCountPill(count: flow.actions.length),
                   ],
@@ -291,20 +326,28 @@ class _StepCountPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: AppColors.surfaceElevated,
+        color: theme.colorScheme.surfaceContainer,
         borderRadius: AppRadius.xsBR,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.playlist_play_rounded,
-              size: 10, color: AppColors.textTertiary),
+          Icon(
+            Icons.playlist_play_rounded,
+            size: 10, 
+            color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+          ),
           const SizedBox(width: 3),
-          Text('$count step${count == 1 ? '' : 's'}',
-              style: AppTypography.labelSm),
+          Text(
+            '$count step${count == 1 ? '' : 's'}',
+            style: AppTypography.labelSm.copyWith(
+              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+            ),
+          ),
         ],
       ),
     );
@@ -314,21 +357,28 @@ class _StepCountPill extends StatelessWidget {
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState(
-      {required this.onAddBlank, required this.onAddTemplates});
+  const _EmptyState({
+    required this.onAddBlank, 
+    required this.onAddTemplates,
+  });
+  
   final VoidCallback onAddBlank;
   final VoidCallback onAddTemplates;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xxxl),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.auto_mode_rounded,
-                size: 48, color: AppColors.textTertiary),
+            Icon(
+              Icons.auto_mode_rounded,
+              size: 48, 
+              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+            ),
             const SizedBox(height: AppSpacing.lg),
             Text('No automations yet', style: AppTypography.headingMd),
             const SizedBox(height: AppSpacing.sm),

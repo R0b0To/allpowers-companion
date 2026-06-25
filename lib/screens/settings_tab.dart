@@ -109,6 +109,7 @@ class _SettingsTabState extends State<SettingsTab> {
   }
 
   void _showResult(String message, {bool isError = false}) {
+    final theme = Theme.of(context);
     final success = !isError;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
@@ -119,13 +120,12 @@ class _SettingsTabState extends State<SettingsTab> {
               Icon(
                 success ? Icons.check_circle_outline : Icons.error_outline,
                 size: 18,
-                color: success ? AppColors.success : AppColors.error,
+                color: success ? AppColors.success : theme.colorScheme.error,
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(child: Text(message)),
             ],
           ),
-          backgroundColor: AppColors.surfaceElevated,
           duration: const Duration(seconds: 4),
         ),
       );
@@ -135,86 +135,94 @@ class _SettingsTabState extends State<SettingsTab> {
   Widget build(BuildContext context) {
     final s = widget.strings;
     final settings = widget.settings;
+    final theme = Theme.of(context);
 
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: AppSpacing.md),
-                
-                // ── Local Tapo card ──────────────────────────────────────────
-                SectionCard(
-                  title: s.t('local_tapo_title'),
-                  icon: Icons.wifi_tethering_rounded,
-                  description: s.t('local_tapo_description'),
-                  isActive: settings.useLocalTapo,
-                  switchValue: settings.useLocalTapo,
-                  onSwitchChanged: (v) => widget.onSettingsChanged(
-                    settings.copyWith(useLocalTapo: v),
-                  ),
-                  children: settings.useLocalTapo
-                      ? [
-                          DebouncedSettingsField(
-                            controller: _ipCtrl,
-                            label: s.t('tapo_ip_label'),
-                            prefixIcon: Icons.router_rounded,
-                            onChangedDebounced: _onTapoFieldsChanged,
-                            keyboardType: TextInputType.url,
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
-                          DebouncedSettingsField(
-                            controller: _emailCtrl,
-                            label: s.t('tapo_email_label'),
-                            prefixIcon: Icons.email_outlined,
-                            onChangedDebounced: _onTapoFieldsChanged,
-                            keyboardType: TextInputType.emailAddress,
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
-                          DebouncedSettingsField(
-                            controller: _passwordCtrl,
-                            label: s.t('tapo_password_label'),
-                            prefixIcon: Icons.lock_outline_rounded,
-                            onChangedDebounced: _onTapoFieldsChanged,
-                            obscureText: true,
-                          ),
-                          const SizedBox(height: AppSpacing.lg),
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: _testingTapo ? null : _testLocalTapo,
-                              icon: _testingTapo
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.phonelink_ring_rounded),
-                              label: Text(s.t('test_local_handshake')),
+    return SafeArea(
+      // bottom is false because system navigation offsets are managed 
+      // by the BottomNavigationBar inside MainShell
+      bottom: false,
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: AppSpacing.sm),
+                  
+                  // ── Local Tapo card ──────────────────────────────────────────
+                  SectionCard(
+                    title: s.t('local_tapo_title'),
+                    icon: Icons.wifi_tethering_rounded,
+                    description: s.t('local_tapo_description'),
+                    isActive: settings.useLocalTapo,
+                    switchValue: settings.useLocalTapo,
+                    onSwitchChanged: (v) => widget.onSettingsChanged(
+                      settings.copyWith(useLocalTapo: v),
+                    ),
+                    children: settings.useLocalTapo
+                        ? [
+                            DebouncedSettingsField(
+                              controller: _ipCtrl,
+                              label: s.t('tapo_ip_label'),
+                              prefixIcon: Icons.router_rounded,
+                              onChangedDebounced: _onTapoFieldsChanged,
+                              keyboardType: TextInputType.url,
                             ),
-                          ),
-                        ]
-                      : [],
-                ),
+                            const SizedBox(height: AppSpacing.sm),
+                            DebouncedSettingsField(
+                              controller: _emailCtrl,
+                              label: s.t('tapo_email_label'),
+                              prefixIcon: Icons.email_outlined,
+                              onChangedDebounced: _onTapoFieldsChanged,
+                              keyboardType: TextInputType.emailAddress,
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            DebouncedSettingsField(
+                              controller: _passwordCtrl,
+                              label: s.t('tapo_password_label'),
+                              prefixIcon: Icons.lock_outline_rounded,
+                              onChangedDebounced: _onTapoFieldsChanged,
+                              obscureText: true,
+                            ),
+                            const SizedBox(height: AppSpacing.lg),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: _testingTapo ? null : _testLocalTapo,
+                                icon: _testingTapo
+                                    ? SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: theme.colorScheme.primary,
+                                        ),
+                                      )
+                                    : const Icon(Icons.phonelink_ring_rounded),
+                                label: Text(s.t('test_local_handshake')),
+                              ),
+                            ),
+                          ]
+                        : [],
+                  ),
 
-                const SizedBox(height: AppSpacing.lg),
+                  const SizedBox(height: AppSpacing.lg),
 
-                // ── Remote Access / MQTT card ─────────────────────────────────
-                MqttSettingsCard(
-                  settings: widget.mqttSettings,
-                  mqtt: widget.mqtt,
-                  strings: s,
-                  onSettingsChanged: widget.onMqttSettingsChanged,
-                ),
-              ],
+                  // ── Remote Access / MQTT card ─────────────────────────────────
+                  MqttSettingsCard(
+                    settings: widget.mqttSettings,
+                    mqtt: widget.mqtt,
+                    strings: s,
+                    onSettingsChanged: widget.onMqttSettingsChanged,
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

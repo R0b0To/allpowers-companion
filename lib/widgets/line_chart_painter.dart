@@ -92,6 +92,7 @@ class _TimeSeriesChartState extends State<TimeSeriesChart> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final allPoints = widget.series.expand((s) => s.points).toList();
     if (allPoints.isEmpty) return SizedBox(height: widget.height);
 
@@ -121,9 +122,9 @@ class _TimeSeriesChartState extends State<TimeSeriesChart> {
     // ── X-axis ticks (4 evenly-spaced labels) ───────────────────────────────
     const tickCount = 4;
     final xTicks = List.generate(tickCount, (i) {
-      final frac = i / (tickCount - 1);
+      final fraction = i / (tickCount - 1);
       return DateTime.fromMillisecondsSinceEpoch(
-          (_minX + frac * (_maxX - _minX)).round());
+          (_minX + fraction * (_maxX - _minX)).round());
     });
 
     // ── Dot radius based on density ─────────────────────────────────────────
@@ -185,6 +186,10 @@ class _TimeSeriesChartState extends State<TimeSeriesChart> {
                         maxX: _maxX,
                         selectedTime: widget.selectedTime,
                         dotRadius: dotRadius,
+                        // Passing M3 resolved colors straight down to the painter
+                        gridColor: theme.colorScheme.outlineVariant,
+                        dotBgColor: theme.colorScheme.surfaceContainerLow,
+                        crosshairColor: theme.colorScheme.onSurfaceVariant.withOpacity(0.35),
                       ),
                       size: Size(plotW, widget.height),
                     ),
@@ -223,6 +228,9 @@ class _TimeSeriesPainter extends CustomPainter {
     required this.maxY,
     required this.minX,
     required this.maxX,
+    required this.gridColor,
+    required this.dotBgColor,
+    required this.crosshairColor,
     this.selectedTime,
     this.dotRadius = 2.5,
   });
@@ -234,6 +242,11 @@ class _TimeSeriesPainter extends CustomPainter {
   final double maxX;
   final DateTime? selectedTime;
   final double dotRadius;
+
+  // Modern Dynamic Theme Properties
+  final Color gridColor;
+  final Color dotBgColor;
+  final Color crosshairColor;
 
   Offset _toOffset(ChartPoint p, Size size) {
     final xFrac =
@@ -247,7 +260,7 @@ class _TimeSeriesPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     // ── Grid (5 horizontal lines) ────────────────────────────────────────
     final gridPaint = Paint()
-      ..color = AppColors.border
+      ..color = gridColor
       ..strokeWidth = 1;
     for (var i = 0; i <= 4; i++) {
       final y = size.height * i / 4;
@@ -297,7 +310,7 @@ class _TimeSeriesPainter extends CustomPainter {
       final offsets = s.points.map((p) => _toOffset(p, size)).toList();
       // Background ring so dots pop off the fill.
       final bgPaint = Paint()
-        ..color = AppColors.surface
+        ..color = dotBgColor
         ..style = PaintingStyle.fill;
       final dotPaint = Paint()
         ..color = s.color
@@ -321,7 +334,7 @@ class _TimeSeriesPainter extends CustomPainter {
       Offset(selX, 0),
       Offset(selX, size.height),
       Paint()
-        ..color = AppColors.textSecondary.withOpacity(0.35)
+        ..color = crosshairColor
         ..strokeWidth = 1,
     );
 
@@ -359,5 +372,8 @@ class _TimeSeriesPainter extends CustomPainter {
       old.minY != minY ||
       old.maxY != maxY ||
       old.dotRadius != dotRadius ||
+      old.gridColor != gridColor ||
+      old.dotBgColor != dotBgColor ||
+      old.crosshairColor != crosshairColor ||
       old.seriesList != seriesList;
 }

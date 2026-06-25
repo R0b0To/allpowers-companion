@@ -74,10 +74,10 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: theme.colorScheme.surfaceContainerLow,
         title: TextField(
           controller: _nameCtrl,
           onChanged: (v) => setState(() => _name = v),
@@ -93,21 +93,27 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
         actions: [
           TextButton(
             onPressed: _save,
-            child: Text('Save',
-                style:
-                    AppTypography.headingSm.copyWith(color: AppColors.teal)),
+            child: Text(
+              'Save',
+              style: AppTypography.headingSm.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+            ),
           ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: AppColors.border),
+          child: Container(
+            height: 1, 
+            color: theme.colorScheme.outline,
+          ),
         ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg),
         children: [
           // ── Trigger ─────────────────────────────────────────────────────
-          _SectionLabel(title: 'Trigger', icon: Icons.flash_on_rounded),
+          const _SectionLabel(title: 'Trigger', icon: Icons.flash_on_rounded),
           const SizedBox(height: AppSpacing.sm),
           _TriggerCard(
             trigger: _trigger,
@@ -163,11 +169,8 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
   void _showAddSheet() {
     showModalBottomSheet<FlowActionType>(
       context: context,
-      backgroundColor: AppColors.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius:
-            BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-      ),
+      // Removed custom shape and color parameters to allow dynamic layout
+      // alignment with the global bottomSheetTheme configurations
       builder: (_) => const _AddActionSheet(),
     ).then((type) {
       if (type == null) return;
@@ -186,15 +189,16 @@ class _TriggerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final isFall = trigger.type == FlowTriggerType.batteryFallsBelow;
-    final accentColor = isFall ? AppColors.error : AppColors.success;
+    final accentColor = isFall ? theme.colorScheme.error : AppColors.success;
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: theme.colorScheme.surfaceContainerLow,
         borderRadius: AppRadius.lgBR,
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: theme.colorScheme.outline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -207,7 +211,7 @@ class _TriggerCard extends StatelessWidget {
                   label: 'Falls Below',
                   icon: Icons.trending_down_rounded,
                   selected: isFall,
-                  color: AppColors.error,
+                  color: theme.colorScheme.error,
                   onTap: () => onChanged(trigger.copyWith(
                       type: FlowTriggerType.batteryFallsBelow)),
                 ),
@@ -231,14 +235,18 @@ class _TriggerCard extends StatelessWidget {
           // Threshold
           Row(
             children: [
-              const Icon(Icons.battery_std_rounded,
-                  size: 16, color: AppColors.textTertiary),
+              Icon(
+                Icons.battery_std_rounded,
+                size: 16, 
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+              ),
               const SizedBox(width: AppSpacing.sm),
               Text('Battery threshold', style: AppTypography.bodyMd),
               const Spacer(),
-              Text('${trigger.threshold}%',
-                  style: AppTypography.headingSm
-                      .copyWith(color: accentColor)),
+              Text(
+                '${trigger.threshold}%',
+                style: AppTypography.headingSm.copyWith(color: accentColor),
+              ),
             ],
           ),
           Slider(
@@ -247,7 +255,7 @@ class _TriggerCard extends StatelessWidget {
             max: 99,
             divisions: 98,
             activeColor: accentColor,
-            inactiveColor: AppColors.border,
+            inactiveColor: theme.colorScheme.outline,
             onChanged: (v) =>
                 onChanged(trigger.copyWith(threshold: v.round())),
           ),
@@ -259,12 +267,15 @@ class _TriggerCard extends StatelessWidget {
           // Time window
           Row(
             children: [
-              const Icon(Icons.schedule_rounded,
-                  size: 16, color: AppColors.textTertiary),
+              Icon(
+                Icons.schedule_rounded,
+                size: 16, 
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+              ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                  child: Text('Time window (optional)',
-                      style: AppTypography.bodyMd)),
+                child: Text('Time window (optional)', style: AppTypography.bodyMd),
+              ),
               Switch(
                 value: trigger.hasWindow,
                 onChanged: (v) => onChanged(v
@@ -286,8 +297,9 @@ class _TriggerCard extends StatelessWidget {
                   time: trigger.windowStart!,
                   onPick: () async {
                     final t = await _pickTime(context, trigger.windowStart!);
-                    if (t != null)
+                    if (t != null) {
                       onChanged(trigger.copyWith(windowStart: t));
+                    }
                   },
                 ),
                 const SizedBox(width: AppSpacing.sm),
@@ -296,8 +308,9 @@ class _TriggerCard extends StatelessWidget {
                   time: trigger.windowEnd!,
                   onPick: () async {
                     final t = await _pickTime(context, trigger.windowEnd!);
-                    if (t != null)
+                    if (t != null) {
                       onChanged(trigger.copyWith(windowEnd: t));
+                    }
                   },
                 ),
               ],
@@ -314,28 +327,27 @@ class _TriggerCard extends StatelessWidget {
         context: context,
         initialTime: initial,
         builder: (ctx, child) => Theme(
-          data: ThemeData.dark().copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: AppColors.teal,
-              onPrimary: AppColors.background,
-              surface: AppColors.surfaceElevated,
-              onSurface: AppColors.textPrimary,
-            ),
-          ),
+          // Utilizing unified, globally registered design tokens directly
+          data: AppTheme.timePickerTheme,
           child: child!,
         ),
       );
 }
 
 class _TimeTile extends StatelessWidget {
-  const _TimeTile(
-      {required this.label, required this.time, required this.onPick});
+  const _TimeTile({
+    required this.label, 
+    required this.time, 
+    required this.onPick,
+  });
+  
   final String label;
   final TimeOfDay time;
   final VoidCallback onPick;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final h = time.hour.toString().padLeft(2, '0');
     final m = time.minute.toString().padLeft(2, '0');
     return Expanded(
@@ -344,25 +356,33 @@ class _TimeTile extends StatelessWidget {
         borderRadius: AppRadius.mdBR,
         child: Container(
           padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+            horizontal: AppSpacing.md, 
+            vertical: AppSpacing.sm,
+          ),
           decoration: BoxDecoration(
-            color: AppColors.background,
+            color: theme.colorScheme.surface,
             borderRadius: AppRadius.mdBR,
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: theme.colorScheme.outline),
           ),
           child: Row(
             children: [
-              const Icon(Icons.schedule_outlined,
-                  size: 14, color: AppColors.textTertiary),
+              Icon(
+                Icons.schedule_outlined,
+                size: 14, 
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+              ),
               const SizedBox(width: AppSpacing.xs),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(label, style: AppTypography.labelSm),
-                    Text('$h:$m',
-                        style: AppTypography.headingSm
-                            .copyWith(color: AppColors.teal)),
+                    Text(
+                      '$h:$m',
+                      style: AppTypography.headingSm.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -411,28 +431,36 @@ class _ActionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final (icon, color) = _meta;
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: theme.colorScheme.surfaceContainerLow,
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: theme.colorScheme.outline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
+              AppSpacing.md, 
+              AppSpacing.sm, 
+              AppSpacing.sm, 
+              AppSpacing.sm,
+            ),
             child: Row(
               children: [
                 ReorderableDragStartListener(
                   index: index,
-                  child: const Padding(
-                    padding: EdgeInsets.only(right: AppSpacing.sm),
-                    child: Icon(Icons.drag_handle_rounded,
-                        size: 20, color: AppColors.textTertiary),
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: AppSpacing.sm),
+                    child: Icon(
+                      Icons.drag_handle_rounded,
+                      size: 20, 
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+                    ),
                   ),
                 ),
                 Container(
@@ -451,20 +479,27 @@ class _ActionCard extends StatelessWidget {
                   onPressed: onDelete,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
-                  icon: const Icon(Icons.close_rounded,
-                      size: 18, color: AppColors.textTertiary),
+                  icon: Icon(
+                    Icons.close_rounded,
+                    size: 18, 
+                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                  ),
                 ),
               ],
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(
-                AppSpacing.xl + AppSpacing.lg,
-                0,
-                AppSpacing.md,
-                AppSpacing.md),
+              AppSpacing.xl + AppSpacing.lg,
+              0,
+              AppSpacing.md,
+              AppSpacing.md,
+            ),
             child: _ActionConfig(
-                action: action, settings: settings, onChanged: onChanged),
+              action: action, 
+              settings: settings, 
+              onChanged: onChanged,
+            ),
           ),
         ],
       ),
@@ -473,10 +508,12 @@ class _ActionCard extends StatelessWidget {
 }
 
 class _ActionConfig extends StatelessWidget {
-  const _ActionConfig(
-      {required this.action,
-      required this.settings,
-      required this.onChanged});
+  const _ActionConfig({
+    required this.action,
+    required this.settings,
+    required this.onChanged,
+  });
+  
   final FlowAction action;
   final AutomationSettings settings;
   final ValueChanged<FlowAction> onChanged;
@@ -520,6 +557,7 @@ class _WaitConfigState extends State<_WaitConfig> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Row(
       children: [
         Text('Pause for', style: AppTypography.bodyMd),
@@ -531,8 +569,7 @@ class _WaitConfigState extends State<_WaitConfig> {
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             textAlign: TextAlign.center,
-            style:
-                AppTypography.headingSm.copyWith(color: AppColors.teal),
+            style: AppTypography.headingSm.copyWith(color: theme.colorScheme.primary),
             onChanged: (v) {
               final s = int.tryParse(v);
               if (s != null && s > 0) {
@@ -543,19 +580,20 @@ class _WaitConfigState extends State<_WaitConfig> {
             decoration: InputDecoration(
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
+                horizontal: AppSpacing.sm, 
+                vertical: AppSpacing.sm,
+              ),
               border: OutlineInputBorder(
                 borderRadius: AppRadius.smBR,
-                borderSide: const BorderSide(color: AppColors.border),
+                borderSide: BorderSide(color: theme.colorScheme.outline),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: AppRadius.smBR,
-                borderSide: const BorderSide(color: AppColors.border),
+                borderSide: BorderSide(color: theme.colorScheme.outline),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: AppRadius.smBR,
-                borderSide: const BorderSide(
-                    color: AppColors.borderFocus, width: 1.5),
+                borderSide: BorderSide(color: theme.colorScheme.primary, width: 1.5),
               ),
             ),
           ),
@@ -575,6 +613,7 @@ class _OutletConfig extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Wrap(
       spacing: AppSpacing.sm,
       runSpacing: AppSpacing.sm,
@@ -582,7 +621,7 @@ class _OutletConfig extends StatelessWidget {
         ...BleOutlet.values.map((o) => _Chip(
               label: o.name.toUpperCase(),
               selected: action.outlet == o,
-              color: AppColors.teal,
+              color: theme.colorScheme.primary,
               onTap: () => onChanged(action.copyWith(outlet: o)),
             )),
         const SizedBox(width: AppSpacing.sm),
@@ -595,7 +634,7 @@ class _OutletConfig extends StatelessWidget {
         _Chip(
           label: 'OFF',
           selected: !action.outletOn,
-          color: AppColors.error,
+          color: theme.colorScheme.error,
           onTap: () => onChanged(action.copyWith(outletOn: false)),
         ),
       ],
@@ -645,16 +684,19 @@ class _WebhookConfigState extends State<_WebhookConfig> {
 
 // controlTapo
 class _TapoConfig extends StatelessWidget {
-  const _TapoConfig(
-      {required this.action,
-      required this.settings,
-      required this.onChanged});
+  const _TapoConfig({
+    required this.action,
+    required this.settings,
+    required this.onChanged,
+  });
+  
   final FlowAction action;
   final AutomationSettings settings;
   final ValueChanged<FlowAction> onChanged;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -670,16 +712,17 @@ class _TapoConfig extends StatelessWidget {
             _Chip(
               label: 'OFF',
               selected: !action.tapoOn,
-              color: AppColors.error,
+              color: theme.colorScheme.error,
               onTap: () => onChanged(action.copyWith(tapoOn: false)),
             ),
           ],
         ),
         if (!settings.hasLocalTapoCredentials) ...[
           const SizedBox(height: AppSpacing.xs),
-          Text('⚠ Configure Tapo credentials in Settings',
-              style:
-                  AppTypography.labelSm.copyWith(color: AppColors.warning)),
+          Text(
+            '⚠ Configure Tapo credentials in Settings',
+            style: AppTypography.labelSm.copyWith(color: AppColors.warning),
+          ),
         ],
       ],
     );
@@ -693,18 +736,19 @@ class _AddActionSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const options = [
+    final theme = Theme.of(context);
+    final options = [
       (
         FlowActionType.wait,
         Icons.timer_outlined,
-        AppColors.textSecondary,
+        theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
         'Wait',
         'Pause for N seconds before the next step'
       ),
       (
         FlowActionType.setBleOutlet,
         Icons.power_rounded,
-        AppColors.teal,
+        theme.colorScheme.primary,
         'Set BLE outlet',
         'Toggle USB, AC, or DC output directly via Bluetooth'
       ),
@@ -730,10 +774,11 @@ class _AddActionSheet extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                AppSpacing.lg,
-                AppSpacing.lg,
-                AppSpacing.sm),
+              AppSpacing.lg,
+              AppSpacing.lg,
+              AppSpacing.lg,
+              AppSpacing.sm,
+            ),
             child: Text('Add step', style: AppTypography.headingMd),
           ),
           ...options.map((o) {
@@ -763,17 +808,22 @@ class _AddActionSheet extends StatelessWidget {
 // ── Shared primitives ─────────────────────────────────────────────────────────
 
 class _SectionLabel extends StatelessWidget {
-  const _SectionLabel(
-      {required this.title, required this.icon, this.trailing});
+  const _SectionLabel({
+    required this.title, 
+    required this.icon, 
+    this.trailing,
+  });
+  
   final String title;
   final IconData icon;
   final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Row(
       children: [
-        Icon(icon, size: 16, color: AppColors.teal),
+        Icon(icon, size: 16, color: theme.colorScheme.primary),
         const SizedBox(width: AppSpacing.sm),
         Expanded(child: Text(title, style: AppTypography.headingMd)),
         if (trailing != null) trailing!,
@@ -798,6 +848,7 @@ class _ChoiceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -807,24 +858,28 @@ class _ChoiceChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected
               ? color.withOpacity(0.12)
-              : AppColors.surfaceElevated,
+              : theme.colorScheme.surfaceContainer,
           borderRadius: AppRadius.mdBR,
           border: Border.all(
-            color: selected ? color.withOpacity(0.4) : AppColors.border,
+            color: selected ? color.withOpacity(0.4) : theme.colorScheme.outline,
             width: selected ? 1.5 : 1,
           ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon,
-                size: 14,
-                color: selected ? color : AppColors.textTertiary),
+            Icon(
+              icon,
+              size: 14,
+              color: selected ? color : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+            ),
             const SizedBox(width: AppSpacing.xs),
-            Text(label,
-                style: AppTypography.headingSm.copyWith(
-                    color:
-                        selected ? color : AppColors.textSecondary)),
+            Text(
+              label,
+              style: AppTypography.headingSm.copyWith(
+                color: selected ? color : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
           ],
         ),
       ),
@@ -833,11 +888,13 @@ class _ChoiceChip extends StatelessWidget {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip(
-      {required this.label,
-      required this.selected,
-      required this.color,
-      required this.onTap});
+  const _Chip({
+    required this.label,
+    required this.selected,
+    required this.color,
+    required this.onTap,
+  });
+  
   final String label;
   final bool selected;
   final Color color;
@@ -845,27 +902,33 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+          horizontal: AppSpacing.md, 
+          vertical: AppSpacing.xs,
+        ),
         decoration: BoxDecoration(
           color: selected
               ? color.withOpacity(0.15)
-              : AppColors.surfaceElevated,
+              : theme.colorScheme.surfaceContainer,
           borderRadius: AppRadius.xsBR,
           border: Border.all(
             color: selected
                 ? color.withOpacity(0.5)
-                : AppColors.border,
+                : theme.colorScheme.outline,
           ),
         ),
-        child: Text(label,
-            style: AppTypography.headingSm.copyWith(
-                color: selected ? color : AppColors.textSecondary,
-                fontSize: 12)),
+        child: Text(
+          label,
+          style: AppTypography.headingSm.copyWith(
+            color: selected ? color : theme.colorScheme.onSurfaceVariant,
+            fontSize: 12,
+          ),
+        ),
       ),
     );
   }
@@ -877,17 +940,21 @@ class _EmptyActionsHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: theme.colorScheme.surfaceContainerLow,
         borderRadius: AppRadius.lgBR,
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: theme.colorScheme.outline),
       ),
       child: Column(
         children: [
-          const Icon(Icons.playlist_add_rounded,
-              size: 32, color: AppColors.textTertiary),
+          Icon(
+            Icons.playlist_add_rounded,
+            size: 32, 
+            color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+          ),
           const SizedBox(height: AppSpacing.md),
           Text('No steps yet', style: AppTypography.headingSm),
           const SizedBox(height: AppSpacing.xs),
@@ -914,6 +981,7 @@ class _AddStepButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
@@ -921,8 +989,8 @@ class _AddStepButton extends StatelessWidget {
         icon: const Icon(Icons.add_rounded, size: 18),
         label: const Text('Add step'),
         style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.teal,
-          side: const BorderSide(color: AppColors.teal),
+          foregroundColor: theme.colorScheme.primary,
+          side: BorderSide(color: theme.colorScheme.primary),
           padding: const EdgeInsets.symmetric(vertical: 14),
         ),
       ),

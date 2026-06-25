@@ -18,6 +18,7 @@ class TimeSelectorTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Expanded(
       child: Semantics(
         label: '$label: $formattedTime',
@@ -31,16 +32,16 @@ class TimeSelectorTile extends StatelessWidget {
               vertical: AppSpacing.md,
             ),
             decoration: BoxDecoration(
-              color: AppColors.background,
+              color: theme.colorScheme.surface,
               borderRadius: AppRadius.mdBR,
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: theme.colorScheme.outline),
             ),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.schedule_outlined,
                   size: 16,
-                  color: AppColors.textTertiary,
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
@@ -52,16 +53,16 @@ class TimeSelectorTile extends StatelessWidget {
                       Text(
                         formattedTime,
                         style: AppTypography.headingSm.copyWith(
-                          color: AppColors.teal,
+                          color: theme.colorScheme.primary,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const Icon(
+                Icon(
                   Icons.chevron_right,
                   size: 16,
-                  color: AppColors.textTertiary,
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
                 ),
               ],
             ),

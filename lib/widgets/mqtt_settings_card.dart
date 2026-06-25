@@ -128,6 +128,7 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
   }
 
   void _showSnack(String message, {bool success = true}) {
+    final theme = Theme.of(context);
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(
@@ -135,12 +136,13 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
           Icon(
             success ? Icons.check_circle_outline : Icons.error_outline,
             size: 18,
-            color: success ? AppColors.success : AppColors.error,
+            color: success ? AppColors.success : theme.colorScheme.error,
           ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(child: Text(message)),
         ]),
-        backgroundColor: AppColors.surfaceElevated,
+        // Removed explicit AppColors.surfaceElevated to match the globally
+        // registered snackBarTheme behavior configured in theme.dart
         duration: const Duration(seconds: 4),
       ));
   }
@@ -153,6 +155,7 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
     final settings = widget.settings;
     final mqtt = widget.mqtt;
     final isActive = settings.mode != AppMode.standalone;
+    final theme = Theme.of(context);
 
     return SectionCard(
       title: s.t('mqtt_section_title'),
@@ -291,10 +294,13 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
             child: OutlinedButton.icon(
               onPressed: _testing ? null : _testConnection,
               icon: _testing
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: theme.colorScheme.primary,
+                      ),
                     )
                   : const Icon(Icons.wifi_find_rounded),
               label: Text(s.t('mqtt_test_connection')),
@@ -321,6 +327,7 @@ class _ModeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       children: AppMode.values.map((m) {
         final selected = m == mode;
@@ -339,12 +346,12 @@ class _ModeSelector extends StatelessWidget {
             decoration: BoxDecoration(
               color: selected
                   ? color.withOpacity(0.08)
-                  : AppColors.surfaceElevated,
+                  : theme.colorScheme.surfaceContainer,
               borderRadius: AppRadius.mdBR,
               border: Border.all(
                 color: selected
                     ? color.withOpacity(0.4)
-                    : AppColors.border,
+                    : theme.colorScheme.outline,
                 width: selected ? 1.5 : 1,
               ),
             ),
@@ -357,14 +364,16 @@ class _ModeSelector extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: selected
                         ? color.withOpacity(0.15)
-                        : AppColors.background,
+                        : theme.colorScheme.surface,
                     borderRadius: AppRadius.smBR,
                   ),
-                  child: Icon(icon,
-                      size: 16,
-                      color: selected
-                          ? color
-                          : AppColors.textTertiary),
+                  child: Icon(
+                    icon,
+                    size: 16,
+                    color: selected
+                        ? color
+                        : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                  ),
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
@@ -375,13 +384,15 @@ class _ModeSelector extends StatelessWidget {
                         strings.t('mqtt_mode_${m.name}'),
                         style: AppTypography.headingSm.copyWith(
                           color: selected
-                              ? AppColors.textPrimary
-                              : AppColors.textSecondary,
+                              ? theme.colorScheme.onSurface
+                              : theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
                       Text(
                         strings.t('mqtt_mode_${m.name}_sub'),
-                        style: AppTypography.bodySm,
+                        style: AppTypography.bodySm.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                        ),
                       ),
                     ],
                   ),
@@ -447,13 +458,14 @@ class _ConnectionBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final (color, label, icon) = mqtt.isConnecting
         ? (AppColors.warning, strings.t('mqtt_connecting'),
             Icons.pending_rounded)
         : mqtt.isConnected
             ? (AppColors.success, strings.t('mqtt_connected'),
                 Icons.cloud_done_rounded)
-            : (AppColors.error,
+            : (theme.colorScheme.error,
                 mqtt.lastError ?? strings.t('mqtt_disconnected'),
                 Icons.cloud_off_rounded);
 
@@ -473,7 +485,9 @@ class _ConnectionBadge extends StatelessWidget {
               width: 14,
               height: 14,
               child: CircularProgressIndicator(
-                  strokeWidth: 2, color: color),
+                strokeWidth: 2, 
+                color: color,
+              ),
             )
           else
             Icon(icon, size: 14, color: color),

@@ -31,6 +31,7 @@ class ToggleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Expanded(
       child: Semantics(
         label: '$title outlet',
@@ -53,10 +54,10 @@ class ToggleCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: isActive
                   ? activeColor.withOpacity(0.08)
-                  : AppColors.surface,
+                  : theme.colorScheme.surfaceContainerLow,
               borderRadius: AppRadius.lgBR,
               border: Border.all(
-                color: isActive ? activeColor : AppColors.border,
+                color: isActive ? activeColor : theme.colorScheme.outline,
                 width: isActive ? 1.5 : 1,
               ),
             ),
@@ -74,8 +75,8 @@ class ToggleCard extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: AppTypography.labelMd.copyWith(
                     color: isActive
-                        ? AppColors.textPrimary
-                        : AppColors.textSecondary,
+                        ? theme.colorScheme.onSurface
+                        : theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -108,6 +109,7 @@ class _OutletIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       width: 40,
@@ -115,13 +117,15 @@ class _OutletIcon extends StatelessWidget {
       decoration: BoxDecoration(
         color: isActive
             ? activeColor.withOpacity(0.15)
-            : AppColors.surfaceElevated,
+            : theme.colorScheme.surfaceContainer,
         shape: BoxShape.circle,
       ),
       child: Icon(
         icon,
         size: 20,
-        color: isActive ? activeColor : AppColors.textTertiary,
+        color: isActive 
+            ? activeColor 
+            : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
       ),
     );
   }
@@ -140,17 +144,22 @@ class _StatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: isActive ? color.withOpacity(0.15) : AppColors.surfaceElevated,
+        color: isActive 
+            ? color.withOpacity(0.15) 
+            : theme.colorScheme.surfaceContainer,
         borderRadius: AppRadius.xsBR,
       ),
       child: Text(
         label,
         style: AppTypography.labelSm.copyWith(
-          color: isActive ? color : AppColors.textTertiary,
+          color: isActive 
+              ? color 
+              : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
           fontSize: 9,
         ),
       ),

@@ -66,6 +66,9 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
+    // Enforce Android 16 transparent edge-to-edge style on entry
+    AppTheme.applySystemOverlay();
+    
     _history = HistoryService(_storage);
     _energyLog = EnergyLogService(_storage);
     _ble = BleService(_storage);
@@ -109,8 +112,7 @@ class _MainShellState extends State<MainShell> {
     await _mqtt.configure(mqttSettings);
 
     // Foreground service only needed when this device owns the BLE connection.
-    // In client mode the app is an MQTT consumer only; aggressive background
-    // behaviour is unnecessary and the persistent notification is misleading.
+    // In client mode the app is an MQTT consumer only.
     if (mqttSettings.mode != AppMode.client) {
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
@@ -173,7 +175,7 @@ class _MainShellState extends State<MainShell> {
   }
 
   /// Incoming flows from the other device. Apply locally without
-  /// re-broadcasting (the retained message already covers new subscribers).
+  /// re-broadcasting.
   Future<void> _onMqttFlowsReceived(List<AutomationFlow> flows) async {
     if (!mounted) return;
     _applyingRemoteFlows = true;
@@ -189,8 +191,6 @@ class _MainShellState extends State<MainShell> {
   Future<void> _onSettingsChanged(AutomationSettings updated) async {
     setState(() => _settings = updated);
     await _storage.saveAutomationSettings(updated);
-    // Tapo credentials and other local settings are not synced over MQTT —
-    // they may differ between devices (e.g. different local network access).
   }
 
   Future<void> _onMqttSettingsChanged(MqttSettings updated) async {
@@ -220,8 +220,7 @@ class _MainShellState extends State<MainShell> {
   Future<void> _onFlowsChanged(List<AutomationFlow> updated) async {
     await _applyFlows(updated);
 
-    // Publish to MQTT so the other device gets the update, unless we're
-    // currently applying a remote update (would echo back unnecessarily).
+    // Publish to MQTT so the other device gets the update.
     if (!_applyingRemoteFlows &&
         _mqttSettings.mode != AppMode.standalone) {
       _mqtt.publishFlows(updated);
@@ -229,9 +228,8 @@ class _MainShellState extends State<MainShell> {
   }
 
   /// Shared logic for both local edits and remote MQTT updates.
-  /// Updates FlowEngine state, widget state, and storage.
   Future<void> _applyFlows(List<AutomationFlow> updated) async {
-    // Tell the engine about deletions so it clears persisted trigger state.
+    // Tell the engine about deletions.
     final deletedIds = _flows
         .map((f) => f.id)
         .toSet()
@@ -261,7 +259,9 @@ class _MainShellState extends State<MainShell> {
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.location,
-      if (Platform.isAndroid) Permission.notification,
+      if (Platform.isAndroid) ...[
+        Permission.notification,
+      ],
     ];
     final statuses = await permissions.request();
     if (!mounted) return;
@@ -291,8 +291,12 @@ class _MainShellState extends State<MainShell> {
     final strings = AppStrings(isIt);
 
     if (!_bootstrapped) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: AppColors.teal)),
+      return Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
       );
     }
 
@@ -311,8 +315,6 @@ class _MainShellState extends State<MainShell> {
       settings: _settings,
       strings: strings,
       onFlowsChanged: _onFlowsChanged,
-      // Tell the UI whether this device will actually run the flows, so
-      // it can show a contextual note in client mode.
       isClientMode: isClientMode,
     );
 
@@ -326,8 +328,6 @@ class _MainShellState extends State<MainShell> {
       onMqttSettingsChanged: _onMqttSettingsChanged,
     );
 
-    // In client mode Energy and History stay on the gateway — that device
-    // is the one with BLE and local storage for those records.
     final List<Widget> tabScreens;
     final List<NavigationDestination> destinations;
 
@@ -389,24 +389,32 @@ class _MainShellState extends State<MainShell> {
 
     return Scaffold(
       body: IndexedStack(index: _selectedIndex, children: tabScreens),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_mqttSettings.mode != AppMode.standalone)
-            _MqttModeStrip(mqtt: _mqtt, mode: _mqttSettings.mode),
-          Container(
-            decoration: const BoxDecoration(
-              border: Border(
-                  top: BorderSide(color: AppColors.border, width: 1)),
+      bottomNavigationBar: Container(
+        // Integrates with edge-to-edge transparent system navigation bar colors
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_mqttSettings.mode != AppMode.standalone)
+              _MqttModeStrip(mqtt: _mqtt, mode: _mqttSettings.mode),
+            Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(
+                    color: Theme.of(context).colorScheme.outlineVariant, 
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: NavigationBar(
+                selectedIndex: _selectedIndex,
+                onDestinationSelected: (i) =>
+                    setState(() => _selectedIndex = i),
+                destinations: destinations,
+              ),
             ),
-            child: NavigationBar(
-              selectedIndex: _selectedIndex,
-              onDestinationSelected: (i) =>
-                  setState(() => _selectedIndex = i),
-              destinations: destinations,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -424,19 +432,26 @@ class _MqttModeStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: mqtt,
-      builder: (_, __) {
+      builder: (context, __) {
         final (bgColor, fgColor, icon, label) = _resolve();
         return Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.lg, vertical: 5),
+            horizontal: AppSpacing.lg, 
+            vertical: 6,
+          ),
           color: bgColor,
           child: Row(
             children: [
               Icon(icon, size: 12, color: fgColor),
               const SizedBox(width: AppSpacing.xs),
-              Text(label,
-                  style: AppTypography.labelSm.copyWith(color: fgColor)),
+              Text(
+                label,
+                style: AppTypography.labelSm.copyWith(
+                  color: fgColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
           ),
         );
@@ -447,14 +462,26 @@ class _MqttModeStrip extends StatelessWidget {
   (Color bg, Color fg, IconData icon, String label) _resolve() {
     final tag = mode == AppMode.gateway ? 'GATEWAY' : 'CLIENT';
     if (mqtt.isConnecting) {
-      return (AppColors.warningSurface, AppColors.warning,
-          Icons.pending_rounded, '$tag · Connecting…');
+      return (
+        AppColors.warningSurface, 
+        AppColors.warning,
+        Icons.pending_rounded, 
+        '$tag · Connecting…'
+      );
     }
     if (mqtt.isConnected) {
-      return (AppColors.successSurface, AppColors.success,
-          Icons.cloud_done_rounded, '$tag · MQTT connected');
+      return (
+        AppColors.successSurface, 
+        AppColors.success,
+        Icons.cloud_done_rounded, 
+        '$tag · MQTT connected'
+      );
     }
-    return (AppColors.errorSurface, AppColors.error,
-        Icons.cloud_off_rounded, '$tag · MQTT disconnected — check Settings');
+    return (
+      AppColors.errorSurface, 
+      AppColors.error,
+      Icons.cloud_off_rounded, 
+      '$tag · MQTT disconnected — check Settings'
+    );
   }
 }

@@ -29,15 +29,16 @@ class SectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: theme.colorScheme.surfaceContainerLow,
         borderRadius: AppRadius.lgBR,
         border: Border.all(
           color: isActive
-              ? AppColors.teal.withOpacity(0.4)
-              : AppColors.border,
+              ? theme.colorScheme.primary.withOpacity(0.4)
+              : theme.colorScheme.outline,
           width: isActive ? 1.5 : 1,
         ),
       ),
@@ -65,7 +66,12 @@ class SectionCard extends StatelessWidget {
             ),
             if (description != null) ...[
               const SizedBox(height: AppSpacing.sm),
-              Text(description!, style: AppTypography.bodyMd),
+              Text(
+                description!, 
+                style: AppTypography.bodyMd.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                ),
+              ),
             ],
             if (children.isNotEmpty) ...[
               const SizedBox(height: AppSpacing.lg),
@@ -88,20 +94,23 @@ class _IconBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       width: 36,
       height: 36,
       decoration: BoxDecoration(
         color: isActive
-            ? AppColors.tealSurface
-            : AppColors.surfaceElevated,
+            ? theme.colorScheme.primaryContainer
+            : theme.colorScheme.surfaceContainer,
         borderRadius: AppRadius.smBR,
       ),
       child: Icon(
         icon,
         size: 18,
-        color: isActive ? AppColors.teal : AppColors.textSecondary,
+        color: isActive 
+            ? theme.colorScheme.primary 
+            : theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
       ),
     );
   }

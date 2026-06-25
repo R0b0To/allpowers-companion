@@ -18,9 +18,10 @@ class HistoryEntryTile extends StatelessWidget {
 
   bool get _isOn => entry.action == HistoryAction.turnOn;
 
-  Color get _accentColor {
-    if (!entry.success) return AppColors.error;
-    return _isOn ? AppColors.success : AppColors.textSecondary;
+  Color _accentColor(BuildContext context) {
+    final theme = Theme.of(context);
+    if (!entry.success) return theme.colorScheme.error;
+    return _isOn ? AppColors.success : theme.colorScheme.onSurfaceVariant;
   }
 
   IconData get _methodIcon {
@@ -56,14 +57,15 @@ class HistoryEntryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = _accentColor;
+    final theme = Theme.of(context);
+    final accent = _accentColor(context);
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: theme.colorScheme.surfaceContainerLow,
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: theme.colorScheme.outline),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -104,17 +106,31 @@ class HistoryEntryTile extends StatelessWidget {
                 const SizedBox(height: AppSpacing.sm),
                 Row(
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.battery_std_rounded,
                       size: 12,
-                      color: AppColors.textTertiary,
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
                     ),
                     const SizedBox(width: 4),
-                    Text('${entry.batteryLevel}%', style: AppTypography.bodySm),
+                    Text(
+                      '${entry.batteryLevel}%', 
+                      style: AppTypography.bodySm.copyWith(
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
                     const SizedBox(width: AppSpacing.md),
-                    Icon(_methodIcon, size: 12, color: AppColors.textTertiary),
+                    Icon(
+                      _methodIcon, 
+                      size: 12, 
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                    ),
                     const SizedBox(width: 4),
-                    Text(_methodLabel, style: AppTypography.bodySm),
+                    Text(
+                      _methodLabel, 
+                      style: AppTypography.bodySm.copyWith(
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -134,7 +150,8 @@ class _StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = success ? AppColors.success : AppColors.error;
+    final theme = Theme.of(context);
+    final color = success ? AppColors.success : theme.colorScheme.error;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
