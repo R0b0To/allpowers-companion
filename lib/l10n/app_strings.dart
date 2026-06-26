@@ -1,21 +1,28 @@
 /// Minimal hand-rolled localisation for English / Italian.
-///
-/// The app only has ~50 strings so the full `flutter gen-l10n` / ARB pipeline
-/// would be overkill. If the string list grows significantly, migrating to
-/// `flutter_localizations` + ARB files is worthwhile for translator tooling
-/// and proper pluralisation support.
 final class AppStrings {
   AppStrings(this.isItalian);
 
   final bool isItalian;
 
-  String t(String key) => _translations[key]?[isItalian ? 'it' : 'en'] ?? key;
+  String t(String key) =>
+      _translations[key]?[isItalian ? 'it' : 'en'] ?? key;
 
   static const Map<String, Map<String, String>> _translations = {
     // ── Navigation ──────────────────────────────────────────────────────────
     'tab_control': {'en': 'Control', 'it': 'Controllo'},
     'tab_automations': {'en': 'Automation', 'it': 'Automazione'},
     'tab_history': {'en': 'History', 'it': 'Cronologia'},
+    'tab_devices': {'en': 'Devices', 'it': 'Dispositivi'},
+    'tab_energy': {'en': 'Energy', 'it': 'Energia'},
+
+    // ── Devices tab ──────────────────────────────────────────────────────────
+    'devices_description': {
+      'en': 'Manage your TP-Link Tapo smart plugs.',
+      'it': 'Gestisci le tue prese smart TP-Link Tapo.',
+    },
+    'devices_add': {'en': 'Add device', 'it': 'Aggiungi dispositivo'},
+    'devices_refresh': {'en': 'Refresh', 'it': 'Aggiorna'},
+    'plug_power': {'en': 'Power', 'it': 'Alimentazione'},
 
     // ── Connection states ───────────────────────────────────────────────────
     'connecting': {
@@ -59,7 +66,6 @@ final class AppStrings {
     'discharging': {'en': 'Discharging Out', 'it': 'Uscita'},
 
     // ── Energy tab ──────────────────────────────────────────────────────────
-    'tab_energy': {'en': 'Energy', 'it': 'Energia'},
     'energy_description': {
       'en': 'Battery and power trends recorded from your station over time.',
       'it': 'Andamento di batteria e potenza registrato nel tempo dalla tua stazione.',
@@ -97,8 +103,8 @@ final class AppStrings {
     // ── Automation ──────────────────────────────────────────────────────────
     'automation': {'en': 'Smart Charging', 'it': 'Ricarica automatica'},
     'automation_description': {
-      'en': 'Automatically manages AC outlets and a smart plug based on battery level.',
-      'it': 'Gestisce automaticamente le prese AC e una presa smart in base al livello della batteria.',
+      'en': 'Automatically manages AC outlets and smart plugs based on battery level.',
+      'it': 'Gestisce automaticamente le prese AC e smart in base al livello della batteria.',
     },
     'start_time': {'en': 'Window Start', 'it': 'Inizio finestra'},
     'end_time': {'en': 'Window End', 'it': 'Fine finestra'},
@@ -113,93 +119,45 @@ final class AppStrings {
       'it': 'Il minimo deve essere minore del massimo',
     },
 
-    // ── Plug control ────────────────────────────────────────────────────────
-    'plug_control_actions': {'en': 'Plug Control Actions', 'it': 'Azioni di controllo presa'},
-    'on_webhook_url': {'en': 'Charger ON Webhook URL', 'it': 'URL Webhook ACCENSIONE'},
-    'off_webhook_url': {'en': 'Charger OFF Webhook URL', 'it': 'URL Webhook SPEGNIMENTO'},
-    'on_webhook_url_fallback': {
-      'en': 'Fallback ON Webhook (Optional)',
-      'it': 'Webhook ACCENSIONE di riserva (opzionale)',
-    },
-    'off_webhook_url_fallback': {
-      'en': 'Fallback OFF Webhook (Optional)',
-      'it': 'Webhook SPEGNIMENTO di riserva (opzionale)',
-    },
-    'webhook_url_missing': {
-      'en': 'Set a webhook URL or configure local Tapo first',
-      'it': 'Imposta prima un URL webhook o configura il Tapo locale',
-    },
-
-    // ── Local Tapo ──────────────────────────────────────────────────────────
+    // ── Local Tapo (kept for settings legacy) ───────────────────────────────
     'local_tapo_title': {'en': 'Local Tapo Control', 'it': 'Controllo Tapo locale'},
     'local_tapo_description': {
-      'en': 'Connects directly to the plug on your local network. Falls back to webhooks if unavailable.',
-      'it': 'Si connette direttamente alla presa sulla rete locale. Usa i webhook come riserva se non disponibile.',
+      'en': 'Connects directly to the plug on your local network.',
+      'it': 'Si connette direttamente alla presa sulla rete locale.',
     },
     'tapo_ip_label': {
       'en': 'Plug IP address (e.g. 192.168.1.75)',
       'it': 'Indirizzo IP presa (es. 192.168.1.75)',
     },
-    'tapo_email_label': {'en': 'TP-Link account e-mail', 'it': 'E-mail account TP-Link'},
-    'tapo_password_label': {'en': 'TP-Link account password', 'it': 'Password account TP-Link'},
-    'test_local_handshake': {'en': 'Test Connection', 'it': 'Testa connessione'},
+    'tapo_email_label': {
+      'en': 'TP-Link account e-mail',
+      'it': 'E-mail account TP-Link',
+    },
+    'tapo_password_label': {
+      'en': 'TP-Link account password',
+      'it': 'Password account TP-Link',
+    },
+    'test_local_handshake': {
+      'en': 'Test Connection',
+      'it': 'Testa connessione',
+    },
     'tapo_fields_incomplete': {
       'en': 'Fill in IP, e-mail, and password first.',
       'it': 'Inserisci prima IP, e-mail e password.',
     },
-
-    // ── Action feedback ─────────────────────────────────────────────────────
     'tapo_credentials_incomplete': {
       'en': 'Local Tapo credentials incomplete.',
       'it': 'Credenziali Tapo locale incomplete.',
-    },
-    'tapo_attempting_connection': {
-      'en': 'Connecting to plug…',
-      'it': 'Connessione alla presa…',
-    },
-    'tapo_attempting_local_on': {
-      'en': 'Turning ON via local Tapo…',
-      'it': 'Accensione via Tapo locale…',
-    },
-    'tapo_attempting_local_off': {
-      'en': 'Turning OFF via local Tapo…',
-      'it': 'Spegnimento via Tapo locale…',
-    },
-    'tapo_local_on_successful': {
-      'en': 'Plug turned ON via local Tapo.',
-      'it': 'Presa accesa via Tapo locale.',
-    },
-    'tapo_local_off_successful': {
-      'en': 'Plug turned OFF via local Tapo.',
-      'it': 'Presa spenta via Tapo locale.',
-    },
-    'tapo_local_on_failed': {
-      'en': 'Local Tapo ON failed — trying webhook fallback…',
-      'it': 'Tapo locale ON fallito — tentativo webhook di riserva…',
-    },
-    'tapo_local_off_failed': {
-      'en': 'Local Tapo OFF failed — trying webhook fallback…',
-      'it': 'Tapo locale OFF fallito — tentativo webhook di riserva…',
-    },
-    'executing_webhook': {'en': 'Firing webhook…', 'it': 'Esecuzione webhook…'},
-    'webhook_failed': {'en': 'Webhook failed.', 'it': 'Webhook fallito.'},
-    'webhook_successful_prefix': {
-      'en': 'Webhook OK',
-      'it': 'Webhook riuscito',
-    },
-    'webhook_failed_with_code_prefix': {
-      'en': 'Webhook failed',
-      'it': 'Webhook fallito',
     },
 
     // ── History ─────────────────────────────────────────────────────────────
     'history_description': {
       'en': 'A log of every automation action and the battery level that triggered it.',
-      'it': 'Un registro di ogni azione automatica e del livello di batteria che l\'ha attivata.',
+      'it': "Un registro di ogni azione automatica e del livello di batteria che l'ha attivata.",
     },
     'no_history': {
-      'en': 'No automation actions yet. They\'ll show up here once the engine fires.',
-      'it': 'Nessuna azione automatica ancora. Apparirà qui non appena il motore si attiva.',
+      'en': "No automation actions yet. They'll show up here once the engine fires.",
+      'it': "Nessuna azione automatica ancora. Apparirà qui non appena il motore si attiva.",
     },
     'clear_history': {'en': 'Clear History', 'it': 'Svuota cronologia'},
     'clear_history_confirm': {
@@ -207,28 +165,27 @@ final class AppStrings {
       'it': 'Questo elimina permanentemente tutta la cronologia registrata. Non può essere annullato.',
     },
     'history_action_on': {'en': 'Charger turned ON', 'it': 'Caricatore acceso'},
-    'history_action_off': {'en': 'Charger turned OFF', 'it': 'Caricatore spento'},
+    'history_action_off': {
+      'en': 'Charger turned OFF',
+      'it': 'Caricatore spento',
+    },
     'history_success': {'en': 'Success', 'it': 'Riuscito'},
     'history_failed': {'en': 'Failed', 'it': 'Fallito'},
     'history_method_local_tapo': {'en': 'Local Tapo', 'it': 'Tapo locale'},
     'history_method_webhook': {'en': 'Webhook', 'it': 'Webhook'},
-    'history_method_none': {'en': 'Not configured', 'it': 'Non configurato'},
+    'history_method_none': {
+      'en': 'Not configured',
+      'it': 'Non configurato',
+    },
+    'history_synced_badge': {
+      'en': 'From gateway',
+      'it': 'Dal gateway',
+    },
 
     // ── MQTT / Remote Access ─────────────────────────────────────────────────
-    'mqtt_section_title': {
-      'en': 'Remote Access',
-      'it': 'Accesso remoto',
-    },
-    'mqtt_mode_label': {
-      'en': 'App Mode',
-      'it': 'Modalità app',
-    },
-
-    // Mode names shown in the selector
-    'mqtt_mode_standalone': {
-      'en': 'Standalone',
-      'it': 'Autonomo',
-    },
+    'mqtt_section_title': {'en': 'Remote Access', 'it': 'Accesso remoto'},
+    'mqtt_mode_label': {'en': 'App Mode', 'it': 'Modalità app'},
+    'mqtt_mode_standalone': {'en': 'Standalone', 'it': 'Autonomo'},
     'mqtt_mode_standalone_sub': {
       'en': 'Direct BLE only — no MQTT',
       'it': 'Solo BLE diretto — nessun MQTT',
@@ -237,10 +194,7 @@ final class AppStrings {
       'en': 'Classic mode: this phone holds the BLE connection and controls the station directly.',
       'it': 'Modalità classica: questo telefono gestisce la connessione BLE e controlla la stazione direttamente.',
     },
-    'mqtt_mode_gateway': {
-      'en': 'Gateway',
-      'it': 'Gateway',
-    },
+    'mqtt_mode_gateway': {'en': 'Gateway', 'it': 'Gateway'},
     'mqtt_mode_gateway_sub': {
       'en': 'Share station data via MQTT broker',
       'it': 'Condividi i dati via broker MQTT',
@@ -249,28 +203,17 @@ final class AppStrings {
       'en': 'This phone keeps the BLE connection and publishes telemetry to the broker. Other phones in Client mode can monitor and control the station from anywhere.',
       'it': 'Questo telefono mantiene la connessione BLE e pubblica la telemetria sul broker. Altri telefoni in modalità Client possono monitorare e controllare la stazione ovunque.',
     },
-    'mqtt_mode_client': {
-      'en': 'Client',
-      'it': 'Client',
-    },
+    'mqtt_mode_client': {'en': 'Client', 'it': 'Client'},
     'mqtt_mode_client_sub': {
       'en': 'Monitor & control via MQTT — no BLE needed',
       'it': 'Monitora e controlla via MQTT — BLE non necessario',
     },
     'mqtt_mode_client_desc': {
-      'en': 'No BLE required. This phone subscribes to the gateway\'s data stream and sends outlet commands back through the broker.',
-      'it': 'BLE non richiesto. Questo telefono riceve il flusso dati del gateway e invia comandi presa tramite il broker.',
+      'en': "No BLE required. This phone subscribes to the gateway's data stream and sends outlet commands back through the broker.",
+      'it': "BLE non richiesto. Questo telefono riceve il flusso dati del gateway e invia comandi presa tramite il broker.",
     },
-
-    // Broker fields
-    'mqtt_broker_host': {
-      'en': 'Broker host',
-      'it': 'Host broker',
-    },
-    'mqtt_port': {
-      'en': 'Port',
-      'it': 'Porta',
-    },
+    'mqtt_broker_host': {'en': 'Broker host', 'it': 'Host broker'},
+    'mqtt_port': {'en': 'Port', 'it': 'Porta'},
     'mqtt_username': {
       'en': 'Username (optional)',
       'it': 'Nome utente (opzionale)',
@@ -279,14 +222,8 @@ final class AppStrings {
       'en': 'Password (optional)',
       'it': 'Password (opzionale)',
     },
-    'mqtt_topic_prefix': {
-      'en': 'Topic prefix',
-      'it': 'Prefisso topic',
-    },
-    'mqtt_use_tls': {
-      'en': 'TLS / SSL',
-      'it': 'TLS / SSL',
-    },
+    'mqtt_topic_prefix': {'en': 'Topic prefix', 'it': 'Prefisso topic'},
+    'mqtt_use_tls': {'en': 'TLS / SSL', 'it': 'TLS / SSL'},
     'mqtt_client_id': {
       'en': 'Client ID (optional)',
       'it': 'Client ID (opzionale)',
@@ -295,47 +232,32 @@ final class AppStrings {
       'en': 'Auto-generated if blank',
       'it': 'Generato automaticamente se vuoto',
     },
-    'mqtt_status_topic': {
-      'en': 'Status',
-      'it': 'Stato',
-    },
-    'mqtt_cmd_topic': {
-      'en': 'Commands',
-      'it': 'Comandi',
-    },
-
-    // Buttons / actions
+    'mqtt_status_topic': {'en': 'Status', 'it': 'Stato'},
+    'mqtt_cmd_topic': {'en': 'Commands', 'it': 'Comandi'},
     'mqtt_test_connection': {
       'en': 'Test Broker Connection',
       'it': 'Testa connessione broker',
     },
-
-    // Connection state labels
     'mqtt_connecting': {
       'en': 'Connecting to MQTT broker…',
       'it': 'Connessione al broker MQTT…',
     },
-    'mqtt_connected': {
-      'en': 'MQTT connected',
-      'it': 'MQTT connesso',
-    },
+    'mqtt_connected': {'en': 'MQTT connected', 'it': 'MQTT connesso'},
     'mqtt_disconnected': {
       'en': 'MQTT disconnected',
       'it': 'MQTT disconnesso',
     },
-
-    // Client tab messages
     'mqtt_broker_offline': {
       'en': 'Cannot reach broker',
       'it': 'Broker non raggiungibile',
     },
     'mqtt_check_settings': {
-      'en': 'Check your broker settings in the Automation tab.',
-      'it': 'Controlla le impostazioni broker nella scheda Automazione.',
+      'en': 'Check your broker settings in the Settings tab.',
+      'it': 'Controlla le impostazioni broker nella scheda Impostazioni.',
     },
     'mqtt_configure_hint': {
-      'en': 'Go to Automation → Remote Access to configure.',
-      'it': 'Vai in Automazione → Accesso remoto per configurare.',
+      'en': 'Go to Settings → Remote Access to configure.',
+      'it': 'Vai in Impostazioni → Accesso remoto per configurare.',
     },
     'mqtt_gateway_ble_offline': {
       'en': 'Gateway has no BLE connection',
@@ -345,10 +267,7 @@ final class AppStrings {
       'en': 'The gateway phone is connected to the broker but its Bluetooth link to the station is down. Make sure the gateway phone is near the station.',
       'it': 'Il telefono gateway è connesso al broker ma la connessione Bluetooth alla stazione è interrotta. Assicurati che il telefono gateway sia vicino alla stazione.',
     },
-    'mqtt_remote_label': {
-      'en': 'REMOTE',
-      'it': 'REMOTO',
-    },
+    'mqtt_remote_label': {'en': 'REMOTE', 'it': 'REMOTO'},
     'mqtt_command_latency_note': {
       'en': 'Commands relay via MQTT — allow ~1 s for the gateway to respond.',
       'it': 'I comandi transitano via MQTT — attendi ~1 s per la risposta del gateway.',

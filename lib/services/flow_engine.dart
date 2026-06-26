@@ -5,31 +5,39 @@ import 'package:flutter/material.dart';
 import '../models/automation_flow.dart';
 import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
+import '../models/tapo_device.dart';
 import '../utils/logger.dart';
 import 'ble_service.dart';
 import 'history_service.dart';
 import 'storage_service.dart';
+import 'tapo_device_service.dart';
 import 'tapo_service.dart';
 import 'webhook_service.dart';
 
 /// Evaluates user-defined [AutomationFlow]s against live BLE status and
-/// executes their action sequences.
+/// Tapo plug states, then executes their action sequences.
 ///
 /// ## Trigger guards
 /// Each flow uses an edge-triggered guard ([_triggered]) — it fires once when
-/// the condition first becomes true and is suppressed until the battery moves
-/// back past the threshold. The guard is persisted to [StorageService] so
-/// a restart mid-cycle does not re-fire an already-handled event.
+/// the condition first becomes true and is suppressed until the condition resets.
+/// The guard is persisted to [StorageService] so a restart mid-cycle does not
+/// re-fire an already-handled event.
+///
+/// ## Tapo plug state trigger
+/// For [FlowTriggerType.tapoPlugState] the engine checks whether the named
+/// plug is in the expected state AND the current time is inside the window.
+/// This enables scheduling-like automations, e.g. "ensure plug is ON between
+/// 08:00 and 22:00 — if found OFF, run the action steps".
 ///
 /// ## Concurrency
 /// Flows run independently via [unawaited]; a per-flow [_running] lock
-/// prevents the same flow from overlapping itself when BLE packets arrive
-/// faster than a sequence with [wait] steps can complete.
+/// prevents the same flow from overlapping itself.
 final class FlowEngine {
   FlowEngine(
     this._ble,
     this._webhooks,
     this._tapo,
+    this._tapoDevices,
     this._history,
     this._storage,
   );
@@ -37,6 +45,7 @@ final class FlowEngine {
   final BleService _ble;
   final WebhookService _webhooks;
   final TapoService _tapo;
+  final TapoDeviceService _tapoDevices;
   final HistoryService _history;
   final StorageService _storage;
 
@@ -46,7 +55,6 @@ final class FlowEngine {
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
-  /// Restore persisted trigger states. Must be called once after flows are loaded.
   Future<void> init(List<AutomationFlow> flows) async {
     for (final flow in flows) {
       _triggered[flow.id] = await _storage.getFlowTriggered(flow.id);
@@ -55,7 +63,7 @@ final class FlowEngine {
     Log.i('FlowEngine', 'init — ${flows.length} flow(s) loaded');
   }
 
-  // ── Evaluation ─────────────────────────────────────────────────────────────
+  // ── Evaluation (called on BLE status update) ───────────────────────────────
 
   Future<void> evaluate(
     List<AutomationFlow> flows,
@@ -68,32 +76,68 @@ final class FlowEngine {
     }
   }
 
+  /// Evaluates Tapo-plug-state triggers. Called by [TapoDeviceService]
+  /// after every poll cycle so plug-state changes are detected promptly.
+  Future<void> evaluateTapoTriggers(
+    List<AutomationFlow> flows,
+    AutomationSettings settings,
+  ) async {
+    if (!_initialized) return;
+    for (final flow in flows) {
+      if (!flow.enabled) continue;
+      if (flow.trigger.type != FlowTriggerType.tapoPlugState) continue;
+      unawaited(_evaluateFlow(flow, settings));
+    }
+  }
+
   Future<void> _evaluateFlow(
     AutomationFlow flow,
     AutomationSettings settings,
   ) async {
     if (_running[flow.id] == true) return;
 
-    final level = _ble.status.batteryLevel;
-    if (level <= 0) return;
-
+    // ── Time window guard ──────────────────────────────────────────────────
     if (!flow.trigger.isTimeInWindow(TimeOfDay.now())) {
+      // Outside window: reset trigger so it fires again when window opens.
       await _setTriggered(flow.id, false);
       return;
     }
 
-    final bool shouldFire;
-    final bool shouldReset;
+    bool shouldFire = false;
+    bool shouldReset = false;
 
     switch (flow.trigger.type) {
       case FlowTriggerType.batteryFallsBelow:
+        final level = _ble.status.batteryLevel;
+        if (level <= 0) return;
         shouldFire =
             level <= flow.trigger.threshold && _triggered[flow.id] != true;
         shouldReset = level > flow.trigger.threshold;
+
       case FlowTriggerType.batteryRisesAbove:
+        final level = _ble.status.batteryLevel;
+        if (level <= 0) return;
         shouldFire =
             level >= flow.trigger.threshold && _triggered[flow.id] != true;
         shouldReset = level < flow.trigger.threshold;
+
+      case FlowTriggerType.tapoPlugState:
+        final deviceId = flow.trigger.tapoDeviceId;
+        final expectedOn = flow.trigger.tapoExpectedOn;
+        if (deviceId == null || deviceId.isEmpty || expectedOn == null) return;
+
+        final device = _tapoDevices.getDevice(deviceId);
+        if (device == null || !device.isOnline) {
+          // Device offline — don't fire or reset.
+          return;
+        }
+
+        // Fire when the plug is in the unexpected state (e.g. expected ON but
+        // found OFF) and we haven't already fired for this condition.
+        // "Expected ON" means we WANT it on, so fire when it IS off (to fix it).
+        final isInWrongState = device.isOn != expectedOn;
+        shouldFire = isInWrongState && _triggered[flow.id] != true;
+        shouldReset = !isInWrongState;
     }
 
     if (shouldReset) await _setTriggered(flow.id, false);
@@ -101,12 +145,12 @@ final class FlowEngine {
 
     await _setTriggered(flow.id, true);
     _running[flow.id] = true;
-    Log.i('FlowEngine', 'Firing "${flow.name}" at battery $level%');
+    Log.i('FlowEngine', 'Firing "${flow.name}" (trigger: ${flow.trigger.type.name})');
 
     try {
-      final triggerLevel = level;
+      final triggerLevel = _ble.status.batteryLevel;
       for (final action in flow.actions) {
-        await _execute(action, settings, triggerLevel);
+        await _execute(action, settings, triggerLevel, flow.name);
       }
       Log.i('FlowEngine', '"${flow.name}" completed');
     } catch (e) {
@@ -122,6 +166,7 @@ final class FlowEngine {
     FlowAction action,
     AutomationSettings settings,
     int triggerLevel,
+    String flowName,
   ) async {
     switch (action.type) {
       case FlowActionType.wait:
@@ -139,6 +184,15 @@ final class FlowEngine {
         }
         Log.d('FlowEngine',
             '${action.outlet.name} → ${action.outletOn ? "ON" : "OFF"}');
+        await _history.addEntry(AutomationHistoryEntry(
+          timestamp: DateTime.now(),
+          action: HistoryAction.outletToggled,
+          batteryLevel: triggerLevel,
+          success: true,
+          method: ActivationMethod.bleOutlet,
+          flowName: flowName,
+          deviceName: action.outlet.name.toUpperCase(),
+        ));
 
       case FlowActionType.fireWebhook:
         if (action.webhookUrl.isEmpty) {
@@ -149,34 +203,53 @@ final class FlowEngine {
         Log.d('FlowEngine', 'webhook ${ok ? "OK" : "FAILED"}');
         await _history.addEntry(AutomationHistoryEntry(
           timestamp: DateTime.now(),
-          action: HistoryAction.turnOn,
+          action: HistoryAction.webhookFired,
           batteryLevel: triggerLevel,
           success: ok,
           method: ActivationMethod.webhook,
+          flowName: flowName,
         ));
 
       case FlowActionType.controlTapo:
-        if (!settings.hasLocalTapoCredentials) {
-          Log.w('FlowEngine', 'controlTapo: no credentials — skipping');
-          return;
-        }
-        _tapo.resetSession(ip: settings.tapoIp, email: settings.tapoEmail);
-        final ok = await _tapo.setOn(
-          ip: settings.tapoIp,
-          email: settings.tapoEmail,
-          password: settings.tapoPassword,
-          on: action.tapoOn,
-        );
-        Log.i('FlowEngine',
-            'Tapo ${action.tapoOn ? "ON" : "OFF"}: ${ok ? "OK" : "FAILED"}');
-        await _history.addEntry(AutomationHistoryEntry(
-          timestamp: DateTime.now(),
-          action: action.tapoOn ? HistoryAction.turnOn : HistoryAction.turnOff,
-          batteryLevel: triggerLevel,
-          success: ok,
-          method: ActivationMethod.localTapo,
-        ));
+        await _executeTapoAction(action, settings, triggerLevel, flowName);
     }
+  }
+
+  Future<void> _executeTapoAction(
+    FlowAction action,
+    AutomationSettings settings,
+    int triggerLevel,
+    String flowName,
+  ) async {
+    // Prefer the new multi-device system (device ID set on the action).
+    if (action.tapoDeviceId.isNotEmpty) {
+      final device = _tapoDevices.getDevice(action.tapoDeviceId);
+      if (device == null) {
+        Log.w('FlowEngine', 'controlTapo: device ${action.tapoDeviceId} not found');
+        return;
+      }
+
+      _tapo.resetSession(ip: device.ip, email: device.email);
+      final ok = await _tapo.setOn(
+        ip: device.ip,
+        email: device.email,
+        password: device.password,
+        on: action.tapoOn,
+      );
+      Log.i('FlowEngine',
+          'Tapo "${device.name}" ${action.tapoOn ? "ON" : "OFF"}: ${ok ? "OK" : "FAILED"}');
+      await _history.addEntry(AutomationHistoryEntry(
+        timestamp: DateTime.now(),
+        action: action.tapoOn ? HistoryAction.tapoOn : HistoryAction.tapoOff,
+        batteryLevel: triggerLevel,
+        success: ok,
+        method: ActivationMethod.localTapo,
+        flowName: flowName,
+        deviceName: device.name,
+      ));
+      return;
+    }
+
   }
 
   // ── Persistence helpers ────────────────────────────────────────────────────
@@ -187,7 +260,6 @@ final class FlowEngine {
     await _storage.setFlowTriggered(flowId, value);
   }
 
-  /// Call when a flow is deleted to avoid leaving orphaned storage keys.
   Future<void> onFlowDeleted(String flowId) async {
     _triggered.remove(flowId);
     _running.remove(flowId);

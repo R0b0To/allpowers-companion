@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../l10n/app_strings.dart';
 import '../models/automation_flow.dart';
+import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
 import '../models/mqtt_settings.dart';
 import '../services/ble_service.dart';
@@ -15,11 +17,13 @@ import '../services/history_service.dart';
 import '../services/mqtt_service.dart';
 import '../services/notification_service.dart';
 import '../services/storage_service.dart';
+import '../services/tapo_device_service.dart';
 import '../services/tapo_service.dart';
 import '../services/webhook_service.dart';
 import '../theme/app_theme.dart';
 import 'automations_tab.dart';
 import 'control_tab.dart';
+import 'devices_tab.dart';
 import 'energy_tab.dart';
 import 'history_tab.dart';
 import 'mqtt_client_tab.dart';
@@ -43,6 +47,7 @@ class _MainShellState extends State<MainShell> {
   late final HistoryService _history;
   late final EnergyLogService _energyLog;
   late final BleService _ble;
+  late final TapoDeviceService _tapoDevices;
   late final FlowEngine _flowEngine;
 
   // ── MQTT publish throttling ────────────────────────────────────────────────
@@ -59,8 +64,6 @@ class _MainShellState extends State<MainShell> {
   int _selectedIndex = 0;
   bool _bootstrapped = false;
 
-  /// Prevents re-publishing flows that were just received from MQTT,
-  /// which would create an unnecessary echo on the broker.
   bool _applyingRemoteFlows = false;
 
   @override
@@ -71,7 +74,10 @@ class _MainShellState extends State<MainShell> {
     _history = HistoryService(_storage);
     _energyLog = EnergyLogService(_storage);
     _ble = BleService(_storage);
-    _flowEngine = FlowEngine(_ble, _webhooks, _tapo, _history, _storage);
+    _tapoDevices = TapoDeviceService(_tapo, _storage);
+    _flowEngine = FlowEngine(
+        _ble, _webhooks, _tapo, _tapoDevices, _history, _storage);
+
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
@@ -103,11 +109,16 @@ class _MainShellState extends State<MainShell> {
 
     await _history.init();
     await _energyLog.init();
+    await _tapoDevices.init();
     await _flowEngine.init(flows);
     await _ble.init();
 
+    // Hook Tapo device updates to evaluate plug-state triggers.
+    _tapoDevices.addListener(_onTapoDevicesChanged);
+
     _mqtt.onCommand = _onMqttCommand;
     _mqtt.onFlowsReceived = _onMqttFlowsReceived;
+    _mqtt.onHistoryReceived = _onMqttHistoryReceived;
     await _mqtt.configure(mqttSettings);
 
     if (mqttSettings.mode != AppMode.client) {
@@ -155,6 +166,15 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  // ── Tapo device polling callback ───────────────────────────────────────────
+
+  void _onTapoDevicesChanged() {
+    // Evaluate plug-state triggers whenever the poll cycle completes.
+    if (_mqttSettings.mode != AppMode.client) {
+      _flowEngine.evaluateTapoTriggers(_flows, _settings);
+    }
+  }
+
   // ── MQTT callbacks ─────────────────────────────────────────────────────────
 
   void _onMqttCommand(String outlet, bool value) {
@@ -180,6 +200,20 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  /// Client: merge incoming history entries from the gateway.
+  /// Gateway: ignore (it already has them locally).
+  Future<void> _onMqttHistoryReceived(
+      List<AutomationHistoryEntry> entries) async {
+    if (!mounted) return;
+    if (_mqttSettings.mode != AppMode.client) return;
+    // For a snapshot (many entries), replace. For a single live entry, prepend.
+    if (entries.length == 1) {
+      await _history.addEntry(entries.first);
+    } else {
+      await _history.replaceAll(entries);
+    }
+  }
+
   // ── Settings callbacks ─────────────────────────────────────────────────────
 
   Future<void> _onSettingsChanged(AutomationSettings updated) async {
@@ -193,8 +227,8 @@ class _MainShellState extends State<MainShell> {
 
     setState(() {
       _mqttSettings = updated;
-
-      final maxIndex = nowClient ? 2 : 4;
+      // Clamp selected index to the new tab count.
+      final maxIndex = _tabCount(nowClient) - 1;
       if (_selectedIndex > maxIndex) _selectedIndex = 0;
     });
 
@@ -247,9 +281,7 @@ class _MainShellState extends State<MainShell> {
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.location,
-      if (Platform.isAndroid) ...[
-        Permission.notification,
-      ],
+      if (Platform.isAndroid) Permission.notification,
     ];
     final statuses = await permissions.request();
     if (!mounted) return;
@@ -259,20 +291,25 @@ class _MainShellState extends State<MainShell> {
     });
   }
 
+  // ── Tab count helper ───────────────────────────────────────────────────────
+
+  int _tabCount(bool isClientMode) => isClientMode ? 3 : 6;
+
   // ── Dispose ────────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
-
     _ble.onStatus = null;
     _mqtt.onCommand = null;
     _mqtt.onFlowsReceived = null;
+    _mqtt.onHistoryReceived = null;
 
+    _tapoDevices.removeListener(_onTapoDevicesChanged);
     _ble.removeListener(_onBleStateChanged);
     _ble.dispose();
     _history.dispose();
     _energyLog.dispose();
-    // FIX B-2 (partial): dispose TapoService to close its HttpClient.
+    _tapoDevices.dispose();
     _tapo.dispose();
     _mqtt.dispose();
     super.dispose();
@@ -297,6 +334,7 @@ class _MainShellState extends State<MainShell> {
 
     final isClientMode = _mqttSettings.mode == AppMode.client;
 
+    // ── Shared tabs ────────────────────────────────────────────────────────
     final controlTab = isClientMode
         ? MqttClientTab(mqtt: _mqtt, strings: strings)
         : ControlTab(
@@ -309,20 +347,40 @@ class _MainShellState extends State<MainShell> {
       flows: _flows,
       settings: _settings,
       strings: strings,
+      tapoDevices: _tapoDevices.devices,
       onFlowsChanged: _onFlowsChanged,
       isClientMode: isClientMode,
+    );
+
+    // History tab: gateway publishes snapshot on first build so clients
+    // receive it. Rebuild listener wraps the tab so it reacts to addEntry.
+    final historyTab = _HistoryTabWithMqttPublish(
+      history: _history,
+      strings: strings,
+      onNewEntry: _mqttSettings.mode == AppMode.gateway
+          ? (entry) {
+              _mqtt.publishHistoryEntry(entry);
+              _mqtt.publishHistorySnapshot(_history.entries);
+            }
+          : null,
     );
 
     final settingsTab = SettingsTab(
       settings: _settings,
       mqttSettings: _mqttSettings,
       mqtt: _mqtt,
-      tapo: _tapo,
       strings: strings,
       onSettingsChanged: _onSettingsChanged,
       onMqttSettingsChanged: _onMqttSettingsChanged,
     );
 
+    final devicesTab = DevicesTab(
+      tapoDevices: _tapoDevices,
+      tapo: _tapo,
+      strings: strings,
+    );
+
+    // ── Tab layouts ────────────────────────────────────────────────────────
     final List<Widget> tabScreens;
     final List<NavigationDestination> destinations;
 
@@ -348,9 +406,10 @@ class _MainShellState extends State<MainShell> {
     } else {
       tabScreens = [
         controlTab,
+        devicesTab,
         automationsTab,
         EnergyTab(energyLog: _energyLog, strings: strings),
-        HistoryTab(history: _history, strings: strings),
+        historyTab,
         settingsTab,
       ];
       destinations = [
@@ -358,6 +417,11 @@ class _MainShellState extends State<MainShell> {
           icon: const Icon(Icons.bolt_outlined),
           selectedIcon: const Icon(Icons.bolt_rounded),
           label: strings.t('tab_control'),
+        ),
+        NavigationDestination(
+          icon: const Icon(Icons.power_outlined),
+          selectedIcon: const Icon(Icons.power_rounded),
+          label: strings.t('tab_devices'),
         ),
         NavigationDestination(
           icon: const Icon(Icons.auto_mode_outlined),
@@ -397,7 +461,8 @@ class _MainShellState extends State<MainShell> {
               decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(
-                    color: Theme.of(context).colorScheme.outlineVariant,
+                    color:
+                        Theme.of(context).colorScheme.outlineVariant,
                     width: 1,
                   ),
                 ),
@@ -414,6 +479,58 @@ class _MainShellState extends State<MainShell> {
       ),
     );
   }
+}
+
+// ── History tab wrapper that publishes new entries to MQTT ────────────────────
+
+/// Thin wrapper around [HistoryTab] that calls [onNewEntry] whenever the
+/// gateway's history service gains a new entry (so clients receive it via MQTT).
+class _HistoryTabWithMqttPublish extends StatefulWidget {
+  const _HistoryTabWithMqttPublish({
+    required this.history,
+    required this.strings,
+    required this.onNewEntry,
+  });
+
+  final HistoryService history;
+  final AppStrings strings;
+  final void Function(AutomationHistoryEntry entry)? onNewEntry;
+
+  @override
+  State<_HistoryTabWithMqttPublish> createState() =>
+      _HistoryTabWithMqttPublishState();
+}
+
+class _HistoryTabWithMqttPublishState
+    extends State<_HistoryTabWithMqttPublish> {
+  int _lastKnownCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastKnownCount = widget.history.entries.length;
+    widget.history.addListener(_onHistoryChanged);
+  }
+
+  void _onHistoryChanged() {
+    final entries = widget.history.entries;
+    if (entries.length > _lastKnownCount && entries.isNotEmpty) {
+      widget.onNewEntry?.call(entries.first);
+    }
+    _lastKnownCount = entries.length;
+  }
+
+  @override
+  void dispose() {
+    widget.history.removeListener(_onHistoryChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => HistoryTab(
+        history: widget.history,
+        strings: widget.strings,
+      );
 }
 
 // ── MQTT mode strip ───────────────────────────────────────────────────────────

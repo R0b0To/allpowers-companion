@@ -9,10 +9,11 @@ import 'package:pointycastle/export.dart';
 
 import '../utils/logger.dart';
 
-/// Controls a TP-Link Tapo smart plug via the local KLAP protocol.
-
+/// Controls TP-Link Tapo smart plugs via the local KLAP protocol.
+///
+/// Sessions are keyed by `$ip:$email` and cached in memory so repeated
+/// calls to the same plug reuse the negotiated encryption context.
 final class TapoService {
-
   final HttpClient _httpClient = HttpClient();
   final Map<String, _TapoSession> _sessions = {};
   bool _disposed = false;
@@ -40,6 +41,26 @@ final class TapoService {
     _sessions.remove('${_normalizeIp(ip)}:$email');
   }
 
+  // ── Public API ─────────────────────────────────────────────────────────────
+
+  /// Returns raw device info map, or null on failure. Used by [TapoDeviceService]
+  /// to poll live state across multiple plugs.
+  Future<Map<String, dynamic>?> getDeviceInfo({
+    required String ip,
+    required String email,
+    required String password,
+  }) async {
+    _assertNotDisposed();
+    final session = _getOrCreateSession(ip, email, password);
+    try {
+      return await session.getDeviceInfo();
+    } catch (e) {
+      Log.w('TapoService', 'getDeviceInfo failed for $ip: $e');
+      session.reset();
+      return null;
+    }
+  }
+
   Future<String> test({
     required String ip,
     required String email,
@@ -51,6 +72,7 @@ final class TapoService {
 
     try {
       final info = await session.getDeviceInfo();
+      if (info == null) return 'No response from device';
       final nickname = _decodeNickname(info['nickname']);
       final model = info['model'] as String? ?? 'Unknown';
       final isOn = info['device_on'] as bool? ?? false;
@@ -70,13 +92,13 @@ final class TapoService {
     final session = _getOrCreateSession(ip, email, password);
     try {
       final info = await session.getDeviceInfo();
-      return info['device_on'] as bool?;
+      return info?['device_on'] as bool?;
     } catch (e) {
       Log.w('TapoService', 'isOn attempt 1 failed, retrying in 2 s — $e');
       await Future<void>.delayed(const Duration(seconds: 2));
       try {
         final info = await session.getDeviceInfo();
-        return info['device_on'] as bool?;
+        return info?['device_on'] as bool?;
       } catch (e2) {
         Log.e('TapoService', 'isOn failed after retry', e2);
         return null;
@@ -95,14 +117,14 @@ final class TapoService {
     final action = on ? 'ON' : 'OFF';
     try {
       await session.setDeviceStatus(on);
-      Log.i('TapoService', 'Plug set to $action');
+      Log.i('TapoService', 'Plug $ip set to $action');
       return true;
     } catch (e) {
       Log.w('TapoService', 'setOn $action attempt 1 failed, retrying in 2 s — $e');
       await Future<void>.delayed(const Duration(seconds: 2));
       try {
         await session.setDeviceStatus(on);
-        Log.i('TapoService', 'Plug set to $action (retry succeeded)');
+        Log.i('TapoService', 'Plug $ip set to $action (retry succeeded)');
         return true;
       } catch (e2) {
         Log.e('TapoService', 'setOn $action failed after retry', e2);
@@ -111,18 +133,10 @@ final class TapoService {
     }
   }
 
-  /// Releases the shared [HttpClient]. Must be called when the owning widget
-  /// is disposed (i.e. from [MainShell.dispose]).
-  ///
-  /// After [dispose] is called, all further method calls will throw a
-  /// [StateError].
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     _sessions.clear();
-    // force: true closes the client even if requests are in-flight. Requests
-    // already awaited will complete with a SocketException which is caught
-    // by the callers' try-catch blocks.
     _httpClient.close(force: true);
     Log.i('TapoService', 'Disposed — HttpClient closed');
   }
@@ -159,7 +173,7 @@ final class TapoService {
   }
 }
 
-// ── Internal session implementation ────────────────────────────────────────────
+// ── Internal session implementation ───────────────────────────────────────────
 
 final class _TapoSession {
   _TapoSession({
@@ -292,11 +306,9 @@ final class _TapoSession {
 
     request.headers
       ..add('Host', uri.host, preserveHeaderCase: true)
-      ..add('User-Agent', 'python-requests/2.28.1',
-          preserveHeaderCase: true)
+      ..add('User-Agent', 'python-requests/2.28.1', preserveHeaderCase: true)
       ..add('Accept', '*/*', preserveHeaderCase: true)
-      ..add('Accept-Encoding', 'gzip, deflate',
-          preserveHeaderCase: true)
+      ..add('Accept-Encoding', 'gzip, deflate', preserveHeaderCase: true)
       ..add('Connection', 'keep-alive', preserveHeaderCase: true)
       ..add('Content-Length', body.length.toString(),
           preserveHeaderCase: true);
@@ -392,7 +404,7 @@ final class _TapoSession {
     _sigPrefix =
         _deriveKey('ldk', localSeed, remoteSeed, authHash).sublist(0, 28);
 
-    Log.i('TapoService', 'KLAP handshake complete');
+    Log.i('TapoService', 'KLAP handshake complete for $ip');
   }
 
   Uint8List _deriveKey(

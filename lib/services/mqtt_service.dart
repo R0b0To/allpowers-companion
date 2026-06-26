@@ -5,45 +5,19 @@ import 'package:flutter/foundation.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
+import '../models/automation_history_entry.dart';
+import '../models/automation_flow.dart';
 import '../models/mqtt_settings.dart';
 import '../models/power_station_status.dart';
 import '../utils/logger.dart';
-import '../models/automation_flow.dart';
 
 /// Manages the MQTT connection in both Gateway and Client modes.
 ///
-/// ## Connect / reconnect lifecycle
-///
-/// 1. [configure] is called with the user's [MqttSettings].
-/// 2. [_connect] creates a fresh [MqttServerClient] and calls [connect()].
-///    **[autoReconnect] is intentionally NOT set before this call.**
-///    Setting it before the initial connect changes how the library handles
-///    failures: it suppresses the [NoConnectionException] but also swallows
-///    the error, leaving the app in a permanently-stuck connecting state.
-/// 3. If [connect()] succeeds, [autoReconnect] is enabled on the live client
-///    so subsequent network drops are handled automatically by the library.
-/// 4. [_onDisconnected] now checks whether [autoReconnect] is
-///    already active before scheduling a manual retry. When the library owns
-///    reconnection (post first-connect), we let it do its job and only call
-///    [_scheduleReconnect] for the initial connection phase where autoReconnect
-///    has not yet been activated.
-///
-/// ## "Missing Connection Acknowledgement" cause
-///
-/// This error means the TCP handshake succeeded but the broker dropped the
-/// connection before sending a CONNACK. The most common cause with HiveMQ
-/// Cloud is a TLS / port mismatch:
-///   • Port 8883  →  TLS must be ON
-///   • Port 1883  →  TLS must be OFF
-/// HiveMQ Cloud Serverless only accepts TLS — always use 8883 + TLS ON.
-///
-/// ## Gateway mode
-/// Publishes [PowerStationStatus] JSON to `{prefix}/status` (retained, QoS 1)
-/// on every BLE update; subscribes to `{prefix}/cmd/+` for outlet commands.
-///
-/// ## Client mode
-/// Subscribes to `{prefix}/status`; publishes outlet commands to
-/// `{prefix}/cmd/{usb|ac|dc}`.
+/// ## History sync
+/// Gateway publishes new history entries to `{prefix}/history` (not retained)
+/// so clients receive them in real time. On connect, the gateway also
+/// publishes a snapshot of recent history to `{prefix}/history/snapshot`
+/// (retained, QoS 1) so freshly-connected clients get the full picture.
 final class MqttService extends ChangeNotifier {
   MqttServerClient? _client;
   MqttSettings _settings = const MqttSettings();
@@ -62,14 +36,9 @@ final class MqttService extends ChangeNotifier {
   bool _isConnecting = false;
   String? _lastError;
 
-  /// Gateway mode: invoked with outlet name ("usb"|"ac"|"dc") and requested
-  /// state when a command packet arrives from a client phone.
   void Function(String outlet, bool value)? onCommand;
-
-  /// Called on both gateway and client when a flows update arrives from
-  /// the other side. The handler is responsible for updating local state
-  /// and storage; this service just delivers the parsed list.
   void Function(List<AutomationFlow> flows)? onFlowsReceived;
+  void Function(List<AutomationHistoryEntry> entries)? onHistoryReceived;
 
   PowerStationStatus get remoteStatus => _remoteStatus;
   bool get bleConnectedRemote => _bleConnectedRemote;
@@ -91,10 +60,8 @@ final class MqttService extends ChangeNotifier {
     }
   }
 
-  // ── Publish flows ─────────────────────────────────────────────────────────
+  // ── Publish helpers ────────────────────────────────────────────────────────
 
-  /// Publishes the full flows list (retained, QoS 1) so the other side
-  /// picks it up immediately on connect.
   void publishFlows(List<AutomationFlow> flows) {
     if (!_isConnected) return;
     if (_settings.mode == AppMode.standalone) return;
@@ -104,6 +71,28 @@ final class MqttService extends ChangeNotifier {
       retain: true,
     );
     Log.i('MqttService', 'Flows published (${flows.length} flow(s))');
+  }
+
+  /// Gateway: publishes a single new history entry (not retained — live events).
+  void publishHistoryEntry(AutomationHistoryEntry entry) {
+    if (!_isConnected || _settings.mode != AppMode.gateway) return;
+    _publish(
+      '${_settings.topicPrefix}/history',
+      jsonEncode(entry.toJson()),
+      retain: false,
+    );
+  }
+
+  /// Gateway: publishes a full history snapshot (retained so clients get it on connect).
+  void publishHistorySnapshot(List<AutomationHistoryEntry> entries) {
+    if (!_isConnected || _settings.mode != AppMode.gateway) return;
+    final payload = jsonEncode(entries.map((e) => e.toJson()).toList());
+    _publish(
+      '${_settings.topicPrefix}/history/snapshot',
+      payload,
+      retain: true,
+    );
+    Log.i('MqttService', 'History snapshot published (${entries.length} entries)');
   }
 
   // ── Connect ───────────────────────────────────────────────────────────────
@@ -125,17 +114,10 @@ final class MqttService extends ChangeNotifier {
       c.secure = _settings.useTls;
       c.keepAlivePeriod = 30;
       c.logging(on: kDebugMode);
-
-      // Register onDisconnected BEFORE connecting so we catch drops.
       c.onDisconnected = _onDisconnected;
-
-      // CRITICAL FIX: supplying this callback prevents mqtt_client from
-      // throwing NoConnectionException as an unhandled exception.
       c.onFailedConnectionAttempt = (int attempt) {
         Log.w('MqttService', 'Connection attempt $attempt failed');
       };
-
-      // DO NOT set autoReconnect here — see class-level doc comment.
 
       final connMsg = MqttConnectMessage()
           .withClientIdentifier(id)
@@ -156,12 +138,6 @@ final class MqttService extends ChangeNotifier {
 
       if (status?.state == MqttConnectionState.connected) {
         _reconnectAttempts = 0;
-
-        // Safe to enable auto-reconnect now that the first connect worked.
-        // FIX B-3: autoReconnect is only set here (post first-connect) so
-        // that _onDisconnected can distinguish the initial-connect phase
-        // (where we need manual retry) from post-connect drops (where the
-        // library handles it).
         c.autoReconnect = true;
         c.onAutoReconnected = _onAutoReconnected;
 
@@ -187,12 +163,9 @@ final class MqttService extends ChangeNotifier {
     }
   }
 
-  // ── Reconnect back-off ────────────────────────────────────────────────────
-
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
     _reconnectAttempts++;
-    // 5 s, 10 s, 15 s … capped at 60 s.
     final backoff = Duration(
       seconds: (_reconnectAttempts * 5).clamp(5, _maxBackoffSeconds),
     );
@@ -207,8 +180,6 @@ final class MqttService extends ChangeNotifier {
     });
   }
 
-  // ── Disconnect ────────────────────────────────────────────────────────────
-
   Future<void> _disconnect() async {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -222,10 +193,6 @@ final class MqttService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Connection callbacks ──────────────────────────────────────────────────
-
-  /// Called by mqtt_client after autoReconnect re-establishes the link.
-  /// Re-subscribes because autoReconnect clears all existing subscriptions.
   void _onAutoReconnected() {
     _isConnected = true;
     _lastError = null;
@@ -234,13 +201,11 @@ final class MqttService extends ChangeNotifier {
     Log.i('MqttService', 'Auto-reconnected — re-subscribed');
   }
 
-
   void _onDisconnected() {
     final wasConnected = _isConnected;
     _isConnected = false;
     notifyListeners();
     Log.w('MqttService', 'Disconnected');
-
 
     final libraryOwnsReconnect = _client?.autoReconnect ?? false;
     if (wasConnected && _client != null && !libraryOwnsReconnect) {
@@ -265,7 +230,9 @@ final class MqttService extends ChangeNotifier {
       case AppMode.client:
         c.subscribe(_settings.statusTopic, MqttQos.atLeastOnce);
         c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
-        Log.i('MqttService', 'Client subscribed to status + flows');
+        c.subscribe('${_settings.topicPrefix}/history', MqttQos.atLeastOnce);
+        c.subscribe('${_settings.topicPrefix}/history/snapshot', MqttQos.atLeastOnce);
+        Log.i('MqttService', 'Client subscribed to status + flows + history');
 
       case AppMode.standalone:
         break;
@@ -282,9 +249,20 @@ final class MqttService extends ChangeNotifier {
       final raw =
           MqttPublishPayload.bytesToStringAsString(pub.payload.message);
       try {
-        // Flows topic is shared — handled regardless of mode.
         if (event.topic == _settings.flowsTopic) {
           _handleFlowsSync(raw);
+          continue;
+        }
+
+        // History: single entry
+        if (event.topic == '${_settings.topicPrefix}/history') {
+          _handleHistoryEntry(raw);
+          continue;
+        }
+
+        // History: full snapshot
+        if (event.topic == '${_settings.topicPrefix}/history/snapshot') {
+          _handleHistorySnapshot(raw);
           continue;
         }
 
@@ -315,7 +293,32 @@ final class MqttService extends ChangeNotifier {
     }
   }
 
-  // ── Message handlers ──────────────────────────────────────────────────────
+  void _handleHistoryEntry(String raw) {
+    try {
+      final entry = AutomationHistoryEntry.tryFromJson(
+          jsonDecode(raw) as Map<String, dynamic>);
+      if (entry != null) {
+        onHistoryReceived?.call([entry]);
+      }
+    } catch (e) {
+      Log.e('MqttService', 'Failed to parse history entry', e);
+    }
+  }
+
+  void _handleHistorySnapshot(String raw) {
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      final entries = list
+          .map((j) => AutomationHistoryEntry.tryFromJson(
+              j as Map<String, dynamic>))
+          .whereType<AutomationHistoryEntry>()
+          .toList();
+      Log.i('MqttService', 'History snapshot received (${entries.length} entries)');
+      if (entries.isNotEmpty) onHistoryReceived?.call(entries);
+    } catch (e) {
+      Log.e('MqttService', 'Failed to parse history snapshot', e);
+    }
+  }
 
   void _handleStatus(String raw) {
     final j = jsonDecode(raw) as Map<String, dynamic>;
@@ -347,9 +350,6 @@ final class MqttService extends ChangeNotifier {
 
   // ── Publish ───────────────────────────────────────────────────────────────
 
-  /// Gateway: forward the latest BLE status to all subscribed clients.
-  /// Published with [retain: true] so a freshly-connected client gets the
-  /// current state immediately rather than waiting for the next BLE packet.
   void publishStatus(PowerStationStatus status, {bool bleConnected = true}) {
     if (!_isConnected || _settings.mode != AppMode.gateway) return;
     _publish(
@@ -369,7 +369,6 @@ final class MqttService extends ChangeNotifier {
     );
   }
 
-  /// Client: send an outlet-toggle command to the gateway.
   void sendCommand(String outlet, bool value) {
     if (!_isConnected || _settings.mode != AppMode.client) return;
     _publish(
@@ -390,10 +389,6 @@ final class MqttService extends ChangeNotifier {
         retain: retain);
   }
 
-  // ── One-shot connection test ───────────────────────────────────────────────
-
-  /// Opens a temporary connection to verify broker reachability and
-  /// credentials, then disconnects immediately.
   Future<String> testConnection(MqttSettings s) async {
     final testId =
         'ap_test_${DateTime.now().millisecondsSinceEpoch % 1000000}';
@@ -431,15 +426,11 @@ final class MqttService extends ChangeNotifier {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-
   String _effectiveClientId() {
     final baseId = _settings.clientId.trim().isNotEmpty
         ? _settings.clientId.trim()
         : 'ap';
     final tag = _settings.mode == AppMode.gateway ? 'gw' : 'cl';
-
     return '${baseId}_${tag}_${DateTime.now().microsecondsSinceEpoch}';
   }
 
@@ -470,16 +461,14 @@ final class MqttService extends ChangeNotifier {
     return s.length > 140 ? '${s.substring(0, 140)}…' : s;
   }
 
-  // ── Dispose ───────────────────────────────────────────────────────────────
-
   @override
   void dispose() {
     _reconnectTimer?.cancel();
     _msgSub?.cancel();
     _client?.disconnect();
-    // Clear callbacks to prevent dangling references to disposed widgets.
     onCommand = null;
     onFlowsReceived = null;
+    onHistoryReceived = null;
     super.dispose();
   }
 }

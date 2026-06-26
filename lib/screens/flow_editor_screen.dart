@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/automation_flow.dart';
 import '../models/automation_settings.dart';
+import '../models/tapo_device.dart';
 import '../theme/app_theme.dart';
 
 /// Full-screen editor for a single [AutomationFlow].
@@ -12,7 +13,11 @@ import '../theme/app_theme.dart';
 /// final saved = await Navigator.of(context).push<AutomationFlow>(
 ///   MaterialPageRoute(
 ///     fullscreenDialog: true,
-///     builder: (_) => FlowEditorScreen(flow: existing, settings: settings),
+///     builder: (_) => FlowEditorScreen(
+///       flow: existing,
+///       settings: settings,
+///       tapoDevices: devices,
+///     ),
 ///   ),
 /// );
 /// ```
@@ -22,10 +27,12 @@ class FlowEditorScreen extends StatefulWidget {
     super.key,
     required this.flow,
     required this.settings,
+    required this.tapoDevices,
   });
 
   final AutomationFlow? flow;
   final AutomationSettings settings;
+  final List<TapoDevice> tapoDevices;
 
   @override
   State<FlowEditorScreen> createState() => _FlowEditorScreenState();
@@ -103,10 +110,7 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(
-            height: 1, 
-            color: theme.colorScheme.outline,
-          ),
+          child: Container(height: 1, color: theme.colorScheme.outline),
         ),
       ),
       body: ListView(
@@ -117,6 +121,7 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
           const SizedBox(height: AppSpacing.sm),
           _TriggerCard(
             trigger: _trigger,
+            tapoDevices: widget.tapoDevices,
             onChanged: (t) => setState(() => _trigger = t),
           ),
           const SizedBox(height: AppSpacing.xl),
@@ -152,6 +157,7 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
                 index: index,
                 action: _actions[index],
                 settings: widget.settings,
+                tapoDevices: widget.tapoDevices,
                 onChanged: (updated) =>
                     setState(() => _actions[index] = updated),
                 onDelete: () => setState(() => _actions.removeAt(index)),
@@ -169,8 +175,6 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
   void _showAddSheet() {
     showModalBottomSheet<FlowActionType>(
       context: context,
-      // Removed custom shape and color parameters to allow dynamic layout
-      // alignment with the global bottomSheetTheme configurations
       builder: (_) => const _AddActionSheet(),
     ).then((type) {
       if (type == null) return;
@@ -182,16 +186,30 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
 // ── Trigger card ──────────────────────────────────────────────────────────────
 
 class _TriggerCard extends StatelessWidget {
-  const _TriggerCard({required this.trigger, required this.onChanged});
+  const _TriggerCard({
+    required this.trigger,
+    required this.tapoDevices,
+    required this.onChanged,
+  });
 
   final FlowTrigger trigger;
+  final List<TapoDevice> tapoDevices;
   final ValueChanged<FlowTrigger> onChanged;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isTapo = trigger.type == FlowTriggerType.tapoPlugState;
     final isFall = trigger.type == FlowTriggerType.batteryFallsBelow;
-    final accentColor = isFall ? theme.colorScheme.error : AppColors.success;
+
+    Color accentColor;
+    if (isTapo) {
+      accentColor = AppColors.warning;
+    } else if (isFall) {
+      accentColor = theme.colorScheme.error;
+    } else {
+      accentColor = AppColors.success;
+    }
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -203,100 +221,224 @@ class _TriggerCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Type toggle
-          Row(
+          // ── Type selector ──────────────────────────────────────────────
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
             children: [
-              Expanded(
-                child: _ChoiceChip(
-                  label: 'Falls Below',
-                  icon: Icons.trending_down_rounded,
-                  selected: isFall,
-                  color: theme.colorScheme.error,
-                  onTap: () => onChanged(trigger.copyWith(
-                      type: FlowTriggerType.batteryFallsBelow)),
-                ),
+              _ChoiceChip(
+                label: 'Falls Below',
+                icon: Icons.trending_down_rounded,
+                selected: isFall,
+                color: theme.colorScheme.error,
+                onTap: () => onChanged(trigger.copyWith(
+                    type: FlowTriggerType.batteryFallsBelow)),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: _ChoiceChip(
-                  label: 'Rises Above',
-                  icon: Icons.trending_up_rounded,
-                  selected: !isFall,
-                  color: AppColors.success,
-                  onTap: () => onChanged(trigger.copyWith(
-                      type: FlowTriggerType.batteryRisesAbove)),
-                ),
+              _ChoiceChip(
+                label: 'Rises Above',
+                icon: Icons.trending_up_rounded,
+                selected: trigger.type == FlowTriggerType.batteryRisesAbove,
+                color: AppColors.success,
+                onTap: () => onChanged(trigger.copyWith(
+                    type: FlowTriggerType.batteryRisesAbove)),
+              ),
+              _ChoiceChip(
+                label: 'Plug State',
+                icon: Icons.power_rounded,
+                selected: isTapo,
+                color: AppColors.warning,
+                onTap: () => onChanged(trigger.copyWith(
+                    type: FlowTriggerType.tapoPlugState)),
               ),
             ],
           ),
 
           const SizedBox(height: AppSpacing.lg),
-
-          // Threshold
-          Row(
-            children: [
-              Icon(
-                Icons.battery_std_rounded,
-                size: 16, 
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text('Battery threshold', style: AppTypography.bodyMd),
-              const Spacer(),
-              Text(
-                '${trigger.threshold}%',
-                style: AppTypography.headingSm.copyWith(color: accentColor),
-              ),
-            ],
-          ),
-          Slider(
-            value: trigger.threshold.toDouble(),
-            min: 1,
-            max: 99,
-            divisions: 98,
-            activeColor: accentColor,
-            inactiveColor: theme.colorScheme.outline,
-            onChanged: (v) =>
-                onChanged(trigger.copyWith(threshold: v.round())),
-          ),
-
-          const SizedBox(height: AppSpacing.md),
           const Divider(height: 1),
-          const SizedBox(height: AppSpacing.md),
+          const SizedBox(height: AppSpacing.lg),
 
-          // Time window
+          // ── Battery threshold (only for battery triggers) ───────────────
+          if (!isTapo) ...[
+            Row(
+              children: [
+                Icon(
+                  Icons.battery_std_rounded,
+                  size: 16,
+                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Text('Battery threshold', style: AppTypography.bodyMd),
+                const Spacer(),
+                Text(
+                  '${trigger.threshold}%',
+                  style: AppTypography.headingSm.copyWith(color: accentColor),
+                ),
+              ],
+            ),
+            Slider(
+              value: trigger.threshold.toDouble(),
+              min: 1,
+              max: 99,
+              divisions: 98,
+              activeColor: accentColor,
+              inactiveColor: theme.colorScheme.outline,
+              onChanged: (v) =>
+                  onChanged(trigger.copyWith(threshold: v.round())),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            const Divider(height: 1),
+            const SizedBox(height: AppSpacing.md),
+          ],
+
+          // ── Tapo plug state trigger ─────────────────────────────────────
+          if (isTapo) ...[
+            Row(
+              children: [
+                Icon(Icons.power_rounded,
+                    size: 16,
+                    color:
+                        theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
+                const SizedBox(width: AppSpacing.sm),
+                Text('Plug to monitor', style: AppTypography.bodyMd),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            if (tapoDevices.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                decoration: BoxDecoration(
+                  color: AppColors.warningSurface,
+                  borderRadius: AppRadius.mdBR,
+                  border: Border.all(
+                      color: AppColors.warning.withOpacity(0.3)),
+                ),
+                child: Text(
+                  'No Tapo devices found. Add one in the Devices tab.',
+                  style: AppTypography.bodySm
+                      .copyWith(color: AppColors.warning),
+                ),
+              )
+            else
+              DropdownButtonFormField<String>(
+                value: trigger.tapoDeviceId?.isNotEmpty == true
+                    ? (tapoDevices
+                            .any((d) => d.id == trigger.tapoDeviceId)
+                        ? trigger.tapoDeviceId
+                        : null)
+                    : null,
+                hint: Text('Select plug',
+                    style: AppTypography.bodyMd),
+                decoration: InputDecoration(
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 12),
+                  border: OutlineInputBorder(
+                      borderRadius: AppRadius.mdBR,
+                      borderSide:
+                          BorderSide(color: theme.colorScheme.outline)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: AppRadius.mdBR,
+                      borderSide:
+                          BorderSide(color: theme.colorScheme.outline)),
+                ),
+                items: tapoDevices
+                    .map((d) => DropdownMenuItem(
+                          value: d.id,
+                          child: Text(d.name,
+                              style: AppTypography.bodyLg),
+                        ))
+                    .toList(),
+                onChanged: (id) =>
+                    onChanged(trigger.copyWith(tapoDeviceId: id)),
+                dropdownColor: AppColors.surfaceElevated,
+              ),
+            const SizedBox(height: AppSpacing.md),
+
+            Row(
+              children: [
+                Icon(Icons.electric_bolt_rounded,
+                    size: 16,
+                    color:
+                        theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
+                const SizedBox(width: AppSpacing.sm),
+                Text('Trigger when plug is', style: AppTypography.bodyMd),
+                const Spacer(),
+                _SmallChip(
+                  label: 'OFF',
+                  selected: trigger.tapoExpectedOn == true,
+                  color: AppColors.success,
+                  onTap: () =>
+                      onChanged(trigger.copyWith(tapoExpectedOn: true)),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                _SmallChip(
+                  label: 'ON',
+                  selected: trigger.tapoExpectedOn == false,
+                  color: theme.colorScheme.error,
+                  onTap: () =>
+                      onChanged(trigger.copyWith(tapoExpectedOn: false)),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Text(
+                trigger.tapoExpectedOn == true
+                    ? 'Fires when plug is OFF and you want it ON (inside window)'
+                    : trigger.tapoExpectedOn == false
+                        ? 'Fires when plug is ON and you want it OFF (inside window)'
+                        : 'Choose the expected plug state',
+                style: AppTypography.labelSm,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            const Divider(height: 1),
+            const SizedBox(height: AppSpacing.md),
+          ],
+
+          // ── Time window ────────────────────────────────────────────────
           Row(
             children: [
-              Icon(
-                Icons.schedule_rounded,
-                size: 16, 
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-              ),
+              Icon(Icons.schedule_rounded,
+                  size: 16,
+                  color:
+                      theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: Text('Time window (optional)', style: AppTypography.bodyMd),
+                child: Text(
+                  isTapo
+                      ? 'Active window (required)'
+                      : 'Time window (optional)',
+                  style: AppTypography.bodyMd,
+                ),
               ),
-              Switch(
-                value: trigger.hasWindow,
-                onChanged: (v) => onChanged(v
-                    ? trigger.copyWith(
-                        windowStart: const TimeOfDay(hour: 21, minute: 0),
-                        windowEnd: const TimeOfDay(hour: 8, minute: 0),
-                      )
-                    : trigger.copyWith(
-                        windowStart: null, windowEnd: null)),
-              ),
+              if (!isTapo)
+                Switch(
+                  value: trigger.hasWindow,
+                  onChanged: (v) => onChanged(v
+                      ? trigger.copyWith(
+                          windowStart:
+                              const TimeOfDay(hour: 21, minute: 0),
+                          windowEnd: const TimeOfDay(hour: 8, minute: 0),
+                        )
+                      : trigger.copyWith(
+                          windowStart: null, windowEnd: null)),
+                ),
             ],
           ),
-          if (trigger.hasWindow) ...[
+          if (trigger.hasWindow || isTapo) ...[
             const SizedBox(height: AppSpacing.sm),
             Row(
               children: [
                 _TimeTile(
                   label: 'From',
-                  time: trigger.windowStart!,
+                  time: trigger.windowStart ??
+                      const TimeOfDay(hour: 8, minute: 0),
                   onPick: () async {
-                    final t = await _pickTime(context, trigger.windowStart!);
+                    final t = await _pickTime(
+                        context,
+                        trigger.windowStart ??
+                            const TimeOfDay(hour: 8, minute: 0));
                     if (t != null) {
                       onChanged(trigger.copyWith(windowStart: t));
                     }
@@ -305,9 +447,13 @@ class _TriggerCard extends StatelessWidget {
                 const SizedBox(width: AppSpacing.sm),
                 _TimeTile(
                   label: 'To',
-                  time: trigger.windowEnd!,
+                  time: trigger.windowEnd ??
+                      const TimeOfDay(hour: 22, minute: 0),
                   onPick: () async {
-                    final t = await _pickTime(context, trigger.windowEnd!);
+                    final t = await _pickTime(
+                        context,
+                        trigger.windowEnd ??
+                            const TimeOfDay(hour: 22, minute: 0));
                     if (t != null) {
                       onChanged(trigger.copyWith(windowEnd: t));
                     }
@@ -321,13 +467,11 @@ class _TriggerCard extends StatelessWidget {
     );
   }
 
-  Future<TimeOfDay?> _pickTime(
-      BuildContext context, TimeOfDay initial) =>
+  Future<TimeOfDay?> _pickTime(BuildContext context, TimeOfDay initial) =>
       showTimePicker(
         context: context,
         initialTime: initial,
         builder: (ctx, child) => Theme(
-          // Utilizing unified, globally registered design tokens directly
           data: AppTheme.timePickerTheme,
           child: child!,
         ),
@@ -336,11 +480,11 @@ class _TriggerCard extends StatelessWidget {
 
 class _TimeTile extends StatelessWidget {
   const _TimeTile({
-    required this.label, 
-    required this.time, 
+    required this.label,
+    required this.time,
     required this.onPick,
   });
-  
+
   final String label;
   final TimeOfDay time;
   final VoidCallback onPick;
@@ -356,7 +500,7 @@ class _TimeTile extends StatelessWidget {
         borderRadius: AppRadius.mdBR,
         child: Container(
           padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md, 
+            horizontal: AppSpacing.md,
             vertical: AppSpacing.sm,
           ),
           decoration: BoxDecoration(
@@ -366,11 +510,10 @@ class _TimeTile extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(
-                Icons.schedule_outlined,
-                size: 14, 
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-              ),
+              Icon(Icons.schedule_outlined,
+                  size: 14,
+                  color: theme.colorScheme.onSurfaceVariant
+                      .withOpacity(0.6)),
               const SizedBox(width: AppSpacing.xs),
               Expanded(
                 child: Column(
@@ -402,6 +545,7 @@ class _ActionCard extends StatelessWidget {
     required this.index,
     required this.action,
     required this.settings,
+    required this.tapoDevices,
     required this.onChanged,
     required this.onDelete,
   });
@@ -409,17 +553,18 @@ class _ActionCard extends StatelessWidget {
   final int index;
   final FlowAction action;
   final AutomationSettings settings;
+  final List<TapoDevice> tapoDevices;
   final ValueChanged<FlowAction> onChanged;
   final VoidCallback onDelete;
 
   (IconData, Color) get _meta => switch (action.type) {
         FlowActionType.wait => (Icons.timer_outlined, AppColors.textSecondary),
-        FlowActionType.setBleOutlet => (Icons.power_rounded, AppColors.teal),
-        FlowActionType.fireWebhook => (Icons.link_rounded, AppColors.info),
-        FlowActionType.controlTapo => (
-            Icons.wifi_tethering_rounded,
-            AppColors.warning
-          ),
+        FlowActionType.setBleOutlet =>
+          (Icons.power_rounded, AppColors.teal),
+        FlowActionType.fireWebhook =>
+          (Icons.link_rounded, AppColors.info),
+        FlowActionType.controlTapo =>
+          (Icons.wifi_tethering_rounded, AppColors.warning),
       };
 
   String get _label => switch (action.type) {
@@ -445,21 +590,19 @@ class _ActionCard extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md, 
-              AppSpacing.sm, 
-              AppSpacing.sm, 
-              AppSpacing.sm,
-            ),
+                AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
             child: Row(
               children: [
                 ReorderableDragStartListener(
                   index: index,
                   child: Padding(
-                    padding: const EdgeInsets.only(right: AppSpacing.sm),
+                    padding:
+                        const EdgeInsets.only(right: AppSpacing.sm),
                     child: Icon(
                       Icons.drag_handle_rounded,
-                      size: 20, 
-                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+                      size: 20,
+                      color: theme.colorScheme.onSurfaceVariant
+                          .withOpacity(0.4),
                     ),
                   ),
                 ),
@@ -479,25 +622,21 @@ class _ActionCard extends StatelessWidget {
                   onPressed: onDelete,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
-                  icon: Icon(
-                    Icons.close_rounded,
-                    size: 18, 
-                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-                  ),
+                  icon: Icon(Icons.close_rounded,
+                      size: 18,
+                      color: theme.colorScheme.onSurfaceVariant
+                          .withOpacity(0.6)),
                 ),
               ],
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(
-              AppSpacing.xl + AppSpacing.lg,
-              0,
-              AppSpacing.md,
-              AppSpacing.md,
-            ),
+                AppSpacing.xl + AppSpacing.lg, 0, AppSpacing.md, AppSpacing.md),
             child: _ActionConfig(
-              action: action, 
-              settings: settings, 
+              action: action,
+              settings: settings,
+              tapoDevices: tapoDevices,
               onChanged: onChanged,
             ),
           ),
@@ -511,11 +650,13 @@ class _ActionConfig extends StatelessWidget {
   const _ActionConfig({
     required this.action,
     required this.settings,
+    required this.tapoDevices,
     required this.onChanged,
   });
-  
+
   final FlowAction action;
   final AutomationSettings settings;
+  final List<TapoDevice> tapoDevices;
   final ValueChanged<FlowAction> onChanged;
 
   @override
@@ -527,7 +668,10 @@ class _ActionConfig extends StatelessWidget {
         FlowActionType.fireWebhook =>
           _WebhookConfig(action: action, onChanged: onChanged),
         FlowActionType.controlTapo => _TapoConfig(
-            action: action, settings: settings, onChanged: onChanged),
+            action: action,
+            settings: settings,
+            tapoDevices: tapoDevices,
+            onChanged: onChanged),
       };
 }
 
@@ -545,8 +689,7 @@ class _WaitConfigState extends State<_WaitConfig> {
   @override
   void initState() {
     super.initState();
-    _ctrl =
-        TextEditingController(text: widget.action.waitSeconds.toString());
+    _ctrl = TextEditingController(text: widget.action.waitSeconds.toString());
   }
 
   @override
@@ -569,20 +712,18 @@ class _WaitConfigState extends State<_WaitConfig> {
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             textAlign: TextAlign.center,
-            style: AppTypography.headingSm.copyWith(color: theme.colorScheme.primary),
+            style: AppTypography.headingSm
+                .copyWith(color: theme.colorScheme.primary),
             onChanged: (v) {
               final s = int.tryParse(v);
               if (s != null && s > 0) {
-                widget.onChanged(
-                    widget.action.copyWith(waitSeconds: s));
+                widget.onChanged(widget.action.copyWith(waitSeconds: s));
               }
             },
             decoration: InputDecoration(
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm, 
-                vertical: AppSpacing.sm,
-              ),
+                  horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
               border: OutlineInputBorder(
                 borderRadius: AppRadius.smBR,
                 borderSide: BorderSide(color: theme.colorScheme.outline),
@@ -593,7 +734,8 @@ class _WaitConfigState extends State<_WaitConfig> {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: AppRadius.smBR,
-                borderSide: BorderSide(color: theme.colorScheme.primary, width: 1.5),
+                borderSide: BorderSide(
+                    color: theme.colorScheme.primary, width: 1.5),
               ),
             ),
           ),
@@ -682,16 +824,18 @@ class _WebhookConfigState extends State<_WebhookConfig> {
   }
 }
 
-// controlTapo
+// controlTapo — now with device picker
 class _TapoConfig extends StatelessWidget {
   const _TapoConfig({
     required this.action,
     required this.settings,
+    required this.tapoDevices,
     required this.onChanged,
   });
-  
+
   final FlowAction action;
   final AutomationSettings settings;
+  final List<TapoDevice> tapoDevices;
   final ValueChanged<FlowAction> onChanged;
 
   @override
@@ -700,6 +844,56 @@ class _TapoConfig extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Device picker
+        if (tapoDevices.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: AppColors.warningSurface,
+              borderRadius: AppRadius.smBR,
+            ),
+            child: Text(
+              'No Tapo devices configured. Add one in the Devices tab.',
+              style:
+                  AppTypography.labelSm.copyWith(color: AppColors.warning),
+            ),
+          )
+        else ...[
+          Text('Device', style: AppTypography.labelMd),
+          const SizedBox(height: AppSpacing.xs),
+          DropdownButtonFormField<String>(
+            value: action.tapoDeviceId.isNotEmpty &&
+                    tapoDevices.any((d) => d.id == action.tapoDeviceId)
+                ? action.tapoDeviceId
+                : null,
+            hint: Text('Select plug', style: AppTypography.bodyMd),
+            decoration: InputDecoration(
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
+              border: OutlineInputBorder(
+                  borderRadius: AppRadius.smBR,
+                  borderSide:
+                      BorderSide(color: theme.colorScheme.outline)),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: AppRadius.smBR,
+                  borderSide:
+                      BorderSide(color: theme.colorScheme.outline)),
+            ),
+            items: tapoDevices
+                .map((d) => DropdownMenuItem(
+                      value: d.id,
+                      child: Text(d.name, style: AppTypography.bodyMd),
+                    ))
+                .toList(),
+            onChanged: (id) =>
+                onChanged(action.copyWith(tapoDeviceId: id ?? '')),
+            dropdownColor: AppColors.surfaceElevated,
+          ),
+        ],
+        const SizedBox(height: AppSpacing.sm),
+
+        // ON / OFF chips
         Row(
           children: [
             _Chip(
@@ -717,13 +911,6 @@ class _TapoConfig extends StatelessWidget {
             ),
           ],
         ),
-        if (!settings.hasLocalTapoCredentials) ...[
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            '⚠ Configure Tapo credentials in Settings',
-            style: AppTypography.labelSm.copyWith(color: AppColors.warning),
-          ),
-        ],
       ],
     );
   }
@@ -774,11 +961,7 @@ class _AddActionSheet extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg,
-              AppSpacing.lg,
-              AppSpacing.lg,
-              AppSpacing.sm,
-            ),
+                AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.sm),
             child: Text('Add step', style: AppTypography.headingMd),
           ),
           ...options.map((o) {
@@ -809,11 +992,11 @@ class _AddActionSheet extends StatelessWidget {
 
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel({
-    required this.title, 
-    required this.icon, 
+    required this.title,
+    required this.icon,
     this.trailing,
   });
-  
+
   final String title;
   final IconData icon;
   final Widget? trailing;
@@ -854,30 +1037,35 @@ class _ChoiceChip extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md, vertical: AppSpacing.md),
+            horizontal: AppSpacing.md, vertical: AppSpacing.sm),
         decoration: BoxDecoration(
           color: selected
               ? color.withOpacity(0.12)
               : theme.colorScheme.surfaceContainer,
           borderRadius: AppRadius.mdBR,
           border: Border.all(
-            color: selected ? color.withOpacity(0.4) : theme.colorScheme.outline,
+            color: selected
+                ? color.withOpacity(0.4)
+                : theme.colorScheme.outline,
             width: selected ? 1.5 : 1,
           ),
         ),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 14,
-              color: selected ? color : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-            ),
+            Icon(icon,
+                size: 14,
+                color: selected
+                    ? color
+                    : theme.colorScheme.onSurfaceVariant
+                        .withOpacity(0.6)),
             const SizedBox(width: AppSpacing.xs),
             Text(
               label,
               style: AppTypography.headingSm.copyWith(
-                color: selected ? color : theme.colorScheme.onSurfaceVariant,
+                color: selected
+                    ? color
+                    : theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ],
@@ -887,6 +1075,23 @@ class _ChoiceChip extends StatelessWidget {
   }
 }
 
+class _SmallChip extends StatelessWidget {
+  const _SmallChip({
+    required this.label,
+    required this.selected,
+    required this.color,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => _Chip(
+      label: label, selected: selected, color: color, onTap: onTap);
+}
+
 class _Chip extends StatelessWidget {
   const _Chip({
     required this.label,
@@ -894,7 +1099,7 @@ class _Chip extends StatelessWidget {
     required this.color,
     required this.onTap,
   });
-  
+
   final String label;
   final bool selected;
   final Color color;
@@ -908,9 +1113,7 @@ class _Chip extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, 
-          vertical: AppSpacing.xs,
-        ),
+            horizontal: AppSpacing.md, vertical: AppSpacing.xs),
         decoration: BoxDecoration(
           color: selected
               ? color.withOpacity(0.15)
@@ -950,11 +1153,9 @@ class _EmptyActionsHint extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Icon(
-            Icons.playlist_add_rounded,
-            size: 32, 
-            color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
-          ),
+          Icon(Icons.playlist_add_rounded,
+              size: 32,
+              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4)),
           const SizedBox(height: AppSpacing.md),
           Text('No steps yet', style: AppTypography.headingSm),
           const SizedBox(height: AppSpacing.xs),

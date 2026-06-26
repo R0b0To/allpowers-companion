@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum FlowTriggerType { batteryFallsBelow, batteryRisesAbove }
+enum FlowTriggerType { batteryFallsBelow, batteryRisesAbove, tapoPlugState }
 enum FlowActionType { wait, setBleOutlet, fireWebhook, controlTapo }
 enum BleOutlet { usb, ac, dc }
 
@@ -12,12 +12,23 @@ final class FlowTrigger {
     required this.threshold,
     this.windowStart,
     this.windowEnd,
+    this.tapoDeviceId,
+    this.tapoExpectedOn,
   });
 
   final FlowTriggerType type;
+
+  /// Used for battery triggers (0–100). Unused for [tapoPlugState].
   final int threshold;
+
   final TimeOfDay? windowStart;
   final TimeOfDay? windowEnd;
+
+  /// Used for [FlowTriggerType.tapoPlugState] — the device to watch.
+  final String? tapoDeviceId;
+
+  /// Used for [FlowTriggerType.tapoPlugState] — fire when plug is this state.
+  final bool? tapoExpectedOn;
 
   bool get hasWindow => windowStart != null && windowEnd != null;
 
@@ -34,6 +45,8 @@ final class FlowTrigger {
     int? threshold,
     Object? windowStart = _kSentinel,
     Object? windowEnd = _kSentinel,
+    Object? tapoDeviceId = _kSentinel,
+    Object? tapoExpectedOn = _kSentinel,
   }) =>
       FlowTrigger(
         type: type ?? this.type,
@@ -44,6 +57,12 @@ final class FlowTrigger {
         windowEnd: identical(windowEnd, _kSentinel)
             ? this.windowEnd
             : windowEnd as TimeOfDay?,
+        tapoDeviceId: identical(tapoDeviceId, _kSentinel)
+            ? this.tapoDeviceId
+            : tapoDeviceId as String?,
+        tapoExpectedOn: identical(tapoExpectedOn, _kSentinel)
+            ? this.tapoExpectedOn
+            : tapoExpectedOn as bool?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -51,17 +70,23 @@ final class FlowTrigger {
         'threshold': threshold,
         if (windowStart != null) 'windowStart': _fmtTime(windowStart!),
         if (windowEnd != null) 'windowEnd': _fmtTime(windowEnd!),
+        if (tapoDeviceId != null) 'tapoDeviceId': tapoDeviceId,
+        if (tapoExpectedOn != null) 'tapoExpectedOn': tapoExpectedOn,
       };
 
   static FlowTrigger fromJson(Map<String, dynamic> j) => FlowTrigger(
-        type: FlowTriggerType.values.byName(j['type'] as String),
-        threshold: (j['threshold'] as num).toInt().clamp(0, 100),
+        type: FlowTriggerType.values.byName(
+          j['type'] as String? ?? FlowTriggerType.batteryFallsBelow.name,
+        ),
+        threshold: (j['threshold'] as num? ?? 20).toInt().clamp(0, 100),
         windowStart: j['windowStart'] != null
             ? _parseTime(j['windowStart'] as String)
             : null,
         windowEnd: j['windowEnd'] != null
             ? _parseTime(j['windowEnd'] as String)
             : null,
+        tapoDeviceId: j['tapoDeviceId'] as String?,
+        tapoExpectedOn: j['tapoExpectedOn'] as bool?,
       );
 
   static String _fmtTime(TimeOfDay t) =>
@@ -86,6 +111,7 @@ final class FlowAction {
     this.outletOn = true,
     this.webhookUrl = '',
     this.tapoOn = true,
+    this.tapoDeviceId = '',
   });
 
   final String id;
@@ -96,6 +122,9 @@ final class FlowAction {
   final String webhookUrl;
   final bool tapoOn;
 
+  /// ID of the [TapoDevice] to control. Empty string = no device selected.
+  final String tapoDeviceId;
+
   FlowAction copyWith({
     FlowActionType? type,
     int? waitSeconds,
@@ -103,6 +132,7 @@ final class FlowAction {
     bool? outletOn,
     String? webhookUrl,
     bool? tapoOn,
+    String? tapoDeviceId,
   }) =>
       FlowAction(
         id: id,
@@ -112,6 +142,7 @@ final class FlowAction {
         outletOn: outletOn ?? this.outletOn,
         webhookUrl: webhookUrl ?? this.webhookUrl,
         tapoOn: tapoOn ?? this.tapoOn,
+        tapoDeviceId: tapoDeviceId ?? this.tapoDeviceId,
       );
 
   Map<String, dynamic> toJson() => {
@@ -122,6 +153,7 @@ final class FlowAction {
         'outletOn': outletOn,
         'webhookUrl': webhookUrl,
         'tapoOn': tapoOn,
+        'tapoDeviceId': tapoDeviceId,
       };
 
   static FlowAction fromJson(Map<String, dynamic> j) => FlowAction(
@@ -133,6 +165,7 @@ final class FlowAction {
         outletOn: j['outletOn'] as bool? ?? true,
         webhookUrl: j['webhookUrl'] as String? ?? '',
         tapoOn: j['tapoOn'] as bool? ?? true,
+        tapoDeviceId: j['tapoDeviceId'] as String? ?? '',
       );
 }
 
@@ -194,8 +227,6 @@ final class AutomationFlow {
 
 // ── Starter templates ─────────────────────────────────────────────────────────
 
-/// Replicates the original hardcoded sequence as two configurable flows.
-/// Offered on first launch; the user can edit or delete them freely.
 List<AutomationFlow> buildDefaultFlows() => [
       AutomationFlow(
         id: newFlowId(),

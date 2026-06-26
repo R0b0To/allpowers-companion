@@ -7,22 +7,12 @@ import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
 import '../models/energy_log_entry.dart';
 import '../models/mqtt_settings.dart';
+import '../models/tapo_device.dart';
 import '../utils/logger.dart';
 
 import '../models/automation_flow.dart';
 
 /// Typed, error-safe wrapper around [SharedPreferences].
-///
-/// - All keys are private constants — no raw strings leak into business logic.
-/// - Every read/write is wrapped in try/catch; failures are logged and
-///   surfaced as null / default values rather than crashing the app.
-/// - The Tapo password is stored in plain text inside SharedPreferences
-///   (the same sandbox storage as the rest of the settings). For production
-///   this should be replaced with flutter_secure_storage.
-/// - The energy log uses a compact line format (not JSON) since it can grow
-///   to thousands of entries — see [EnergyLogEntry.toCompact]. If retention
-///   needs to grow well beyond [_maxEnergyLogEntries], consider moving it to
-///   sqflite instead of SharedPreferences.
 final class StorageService {
   // ── Keys — automation / BLE ──────────────────────────────────────────────
   static const _keyDeviceId = 'saved_device_id';
@@ -41,6 +31,8 @@ final class StorageService {
   static const _keyAutomationHistory = 'automation_history';
   static const _keyEnergyLog = 'energy_log';
   static const _keyFlows = 'automation_flows';
+  static const _keyTapoDevices = 'tapo_devices';
+  static const _keyDashboardConfig = 'dashboard_config';
 
   // ── Keys — MQTT ──────────────────────────────────────────────────────────
   static const _keyMqttMode = 'mqtt_mode';
@@ -52,15 +44,9 @@ final class StorageService {
   static const _keyMqttUseTls = 'mqtt_use_tls';
   static const _keyMqttClientId = 'mqtt_client_id';
 
-  /// Hard cap on stored history entries — keeps SharedPreferences (which is
-  /// not meant for large blobs) bounded regardless of how long the app runs.
-  static const _maxHistoryEntries = 100;
-
-  /// Hard cap on stored energy samples. At the default 5-minute sampling
-  /// interval (288 samples/day) this holds roughly 30 days of history.
+  static const _maxHistoryEntries = 200;
   static const _maxEnergyLogEntries = 8640;
 
-  // ── Cached instance ───────────────────────────────────────────────────────
   SharedPreferences? _prefs;
 
   Future<SharedPreferences> _getPrefs() async {
@@ -98,65 +84,121 @@ final class StorageService {
     }
   }
 
-// ── Automation flows ──────────────────────────────────────────────────────────
+  // ── Tapo devices ──────────────────────────────────────────────────────────
 
-Future<List<AutomationFlow>> loadFlows() async {
-  try {
-    final prefs = await _getPrefs();
-    final raw = prefs.getStringList(_keyFlows) ?? [];
-    final flows = <AutomationFlow>[];
-    for (final s in raw) {
-      try {
-        final f = AutomationFlow.tryFromJson(
-            jsonDecode(s) as Map<String, dynamic>);
-        if (f != null) flows.add(f);
-      } catch (_) {}
+  Future<List<TapoDevice>> loadTapoDevices() async {
+    try {
+      final prefs = await _getPrefs();
+      final raw = prefs.getStringList(_keyTapoDevices) ?? [];
+      final devices = <TapoDevice>[];
+      for (final s in raw) {
+        try {
+          final d = TapoDevice.tryFromJson(
+              jsonDecode(s) as Map<String, dynamic>);
+          if (d != null) devices.add(d);
+        } catch (_) {}
+      }
+      return devices;
+    } catch (e) {
+      Log.e('StorageService', 'loadTapoDevices failed', e);
+      return [];
     }
-    return flows;
-  } catch (e) {
-    Log.e('StorageService', 'loadFlows failed', e);
-    return [];
   }
-}
 
-Future<void> saveFlows(List<AutomationFlow> flows) async {
-  try {
-    final prefs = await _getPrefs();
-    await prefs.setStringList(
-      _keyFlows,
-      flows.map((f) => jsonEncode(f.toJson())).toList(),
-    );
-  } catch (e) {
-    Log.e('StorageService', 'saveFlows failed', e);
+  Future<void> saveTapoDevices(List<TapoDevice> devices) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setStringList(
+        _keyTapoDevices,
+        devices.map((d) => jsonEncode(d.toJson())).toList(),
+      );
+    } catch (e) {
+      Log.e('StorageService', 'saveTapoDevices failed', e);
+    }
   }
-}
 
-// ── Per-flow trigger persistence ──────────────────────────────────────────────
+  // ── Dashboard config ──────────────────────────────────────────────────────
 
-Future<bool> getFlowTriggered(String flowId) async {
-  try {
-    final prefs = await _getPrefs();
-    return prefs.getBool('flow_triggered_$flowId') ?? false;
-  } catch (e) {
-    return false;
+  /// Saves the list of dashboard widget IDs in display order.
+  Future<void> saveDashboardConfig(List<String> widgetIds) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setStringList(_keyDashboardConfig, widgetIds);
+    } catch (e) {
+      Log.e('StorageService', 'saveDashboardConfig failed', e);
+    }
   }
-}
 
-Future<void> setFlowTriggered(String flowId, bool value) async {
-  try {
-    final prefs = await _getPrefs();
-    await prefs.setBool('flow_triggered_$flowId', value);
-  } catch (e) {
-    Log.e('StorageService', 'setFlowTriggered failed', e);
+  Future<List<String>> loadDashboardConfig() async {
+    try {
+      final prefs = await _getPrefs();
+      return prefs.getStringList(_keyDashboardConfig) ?? [];
+    } catch (e) {
+      Log.e('StorageService', 'loadDashboardConfig failed', e);
+      return [];
+    }
   }
-}
 
-Future<void> clearFlowTriggered(String flowId) async {
-  try {
-    final prefs = await _getPrefs();
-    await prefs.remove('flow_triggered_$flowId');
-  } catch (e) {}
-}
+  // ── Automation flows ──────────────────────────────────────────────────────
+
+  Future<List<AutomationFlow>> loadFlows() async {
+    try {
+      final prefs = await _getPrefs();
+      final raw = prefs.getStringList(_keyFlows) ?? [];
+      final flows = <AutomationFlow>[];
+      for (final s in raw) {
+        try {
+          final f = AutomationFlow.tryFromJson(
+              jsonDecode(s) as Map<String, dynamic>);
+          if (f != null) flows.add(f);
+        } catch (_) {}
+      }
+      return flows;
+    } catch (e) {
+      Log.e('StorageService', 'loadFlows failed', e);
+      return [];
+    }
+  }
+
+  Future<void> saveFlows(List<AutomationFlow> flows) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setStringList(
+        _keyFlows,
+        flows.map((f) => jsonEncode(f.toJson())).toList(),
+      );
+    } catch (e) {
+      Log.e('StorageService', 'saveFlows failed', e);
+    }
+  }
+
+  // ── Per-flow trigger persistence ──────────────────────────────────────────
+
+  Future<bool> getFlowTriggered(String flowId) async {
+    try {
+      final prefs = await _getPrefs();
+      return prefs.getBool('flow_triggered_$flowId') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<void> setFlowTriggered(String flowId, bool value) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setBool('flow_triggered_$flowId', value);
+    } catch (e) {
+      Log.e('StorageService', 'setFlowTriggered failed', e);
+    }
+  }
+
+  Future<void> clearFlowTriggered(String flowId) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.remove('flow_triggered_$flowId');
+    } catch (e) {}
+  }
+
   // ── Automation settings ───────────────────────────────────────────────────
 
   Future<AutomationSettings> loadAutomationSettings() async {
@@ -170,10 +212,6 @@ Future<void> clearFlowTriggered(String flowId) async {
         highThreshold: prefs.getInt(_keyHighThreshold) ?? 95,
         startTime: _parseTime(prefs.getString(_keyStartTime) ?? '21:00'),
         endTime: _parseTime(prefs.getString(_keyEndTime) ?? '08:00'),
-        useLocalTapo: prefs.getBool(_keyUseLocalTapo) ?? false,
-        tapoIp: prefs.getString(_keyTapoIp) ?? '',
-        tapoEmail: prefs.getString(_keyTapoEmail) ?? '',
-        tapoPassword: prefs.getString(_keyTapoPassword) ?? '',
       );
     } catch (e) {
       Log.e('StorageService', 'loadAutomationSettings failed, returning defaults', e);
@@ -192,10 +230,6 @@ Future<void> clearFlowTriggered(String flowId) async {
         prefs.setInt(_keyHighThreshold, settings.highThreshold),
         prefs.setString(_keyStartTime, _formatTime(settings.startTime)),
         prefs.setString(_keyEndTime, _formatTime(settings.endTime)),
-        prefs.setBool(_keyUseLocalTapo, settings.useLocalTapo),
-        prefs.setString(_keyTapoIp, settings.tapoIp),
-        prefs.setString(_keyTapoEmail, settings.tapoEmail),
-        prefs.setString(_keyTapoPassword, settings.tapoPassword),
       ]);
     } catch (e) {
       Log.e('StorageService', 'saveAutomationSettings failed', e);
@@ -248,8 +282,6 @@ Future<void> clearFlowTriggered(String flowId) async {
 
   // ── Charging-triggered flag ───────────────────────────────────────────────
 
-  /// Persisted across app restarts so a disconnect during a charge cycle
-  /// does not re-trigger the low-battery sequence on reconnect.
   Future<bool> getChargingTriggered() async {
     try {
       final prefs = await _getPrefs();
@@ -271,8 +303,6 @@ Future<void> clearFlowTriggered(String flowId) async {
 
   // ── Automation history ────────────────────────────────────────────────────
 
-  /// Loads stored history entries, newest first. Individually malformed
-  /// entries are skipped rather than failing the whole load.
   Future<List<AutomationHistoryEntry>> loadAutomationHistory() async {
     try {
       final prefs = await _getPrefs();
@@ -284,9 +314,7 @@ Future<void> clearFlowTriggered(String flowId) async {
             jsonDecode(s) as Map<String, dynamic>,
           );
           if (entry != null) entries.add(entry);
-        } catch (_) {
-          // Skip this single entry; one bad row shouldn't drop the rest.
-        }
+        } catch (_) {}
       }
       return entries;
     } catch (e) {
@@ -295,8 +323,6 @@ Future<void> clearFlowTriggered(String flowId) async {
     }
   }
 
-  /// Persists [entries] (expected newest-first), capping at
-  /// [_maxHistoryEntries].
   Future<void> saveAutomationHistory(
     List<AutomationHistoryEntry> entries,
   ) async {
@@ -316,8 +342,6 @@ Future<void> clearFlowTriggered(String flowId) async {
 
   // ── Energy log ─────────────────────────────────────────────────────────────
 
-  /// Loads stored energy samples, oldest first. Individually malformed lines
-  /// are skipped rather than failing the whole load.
   Future<List<EnergyLogEntry>> loadEnergyLog() async {
     try {
       final prefs = await _getPrefs();
@@ -334,8 +358,6 @@ Future<void> clearFlowTriggered(String flowId) async {
     }
   }
 
-  /// Persists [entries] (expected oldest-first), capping at
-  /// [_maxEnergyLogEntries] by dropping the oldest samples first.
   Future<void> saveEnergyLog(List<EnergyLogEntry> entries) async {
     try {
       final prefs = await _getPrefs();
