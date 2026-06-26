@@ -43,6 +43,7 @@ class HistoryTab extends StatelessWidget {
 
     return CustomScrollView(
       slivers: [
+
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -51,18 +52,36 @@ class HistoryTab extends StatelessWidget {
               AppSpacing.lg,
               AppSpacing.lg,
             ),
-            child: Row(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (entries.isNotEmpty)
-                  IconButton(
-                    onPressed: () => _confirmClear(context),
-                    tooltip: strings.t('clear_history'),
-                    icon: Icon(
-                      Icons.delete_outline_rounded,
-                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                // Title row with delete action aligned to the trailing edge.
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        strings.t('tab_history'),
+                        style: AppTypography.displaySm,
+                      ),
                     ),
-                  ),
+                    if (entries.isNotEmpty)
+                      IconButton(
+                        onPressed: () => _confirmClear(context),
+                        tooltip: strings.t('clear_history'),
+                        icon: Icon(
+                          Icons.delete_outline_rounded,
+                          color: theme.colorScheme.onSurfaceVariant
+                              .withOpacity(0.6),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  strings.t('history_description'),
+                  style: AppTypography.bodyMd,
+                ),
               ],
             ),
           ),
@@ -118,10 +137,9 @@ class HistoryTab extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        // Shape and background removed to let this card inherit the globally 
-        // registered dialogTheme configuration inside theme.dart automatically
         title: Text(strings.t('clear_history'), style: AppTypography.headingMd),
-        content: Text(strings.t('clear_history_confirm'), style: AppTypography.bodyMd),
+        content: Text(strings.t('clear_history_confirm'),
+            style: AppTypography.bodyMd),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),

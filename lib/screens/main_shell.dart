@@ -66,9 +66,8 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
-    // Enforce Android 16 transparent edge-to-edge style on entry
     AppTheme.applySystemOverlay();
-    
+
     _history = HistoryService(_storage);
     _energyLog = EnergyLogService(_storage);
     _ble = BleService(_storage);
@@ -111,8 +110,6 @@ class _MainShellState extends State<MainShell> {
     _mqtt.onFlowsReceived = _onMqttFlowsReceived;
     await _mqtt.configure(mqttSettings);
 
-    // Foreground service only needed when this device owns the BLE connection.
-    // In client mode the app is an MQTT consumer only.
     if (mqttSettings.mode != AppMode.client) {
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
@@ -123,7 +120,6 @@ class _MainShellState extends State<MainShell> {
 
   void _onBleStatus(status) {
     _notifications.handleBatteryLevel(status.batteryLevel);
-    // Flows only execute on the device that holds the BLE connection.
     if (_mqttSettings.mode != AppMode.client) {
       _flowEngine.evaluate(_flows, _settings);
     }
@@ -174,8 +170,6 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  /// Incoming flows from the other device. Apply locally without
-  /// re-broadcasting.
   Future<void> _onMqttFlowsReceived(List<AutomationFlow> flows) async {
     if (!mounted) return;
     _applyingRemoteFlows = true;
@@ -199,7 +193,7 @@ class _MainShellState extends State<MainShell> {
 
     setState(() {
       _mqttSettings = updated;
-      // Clamp selected tab index when the tab count changes.
+
       final maxIndex = nowClient ? 2 : 4;
       if (_selectedIndex > maxIndex) _selectedIndex = 0;
     });
@@ -208,10 +202,8 @@ class _MainShellState extends State<MainShell> {
     await _mqtt.configure(updated);
 
     if (!wasClient && nowClient) {
-      // No longer holding the BLE connection — stop the foreground service.
       await ForegroundService.stop();
     } else if (wasClient && !nowClient) {
-      // Now holding the BLE connection — start the foreground service.
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
     }
@@ -220,16 +212,13 @@ class _MainShellState extends State<MainShell> {
   Future<void> _onFlowsChanged(List<AutomationFlow> updated) async {
     await _applyFlows(updated);
 
-    // Publish to MQTT so the other device gets the update.
     if (!_applyingRemoteFlows &&
         _mqttSettings.mode != AppMode.standalone) {
       _mqtt.publishFlows(updated);
     }
   }
 
-  /// Shared logic for both local edits and remote MQTT updates.
   Future<void> _applyFlows(List<AutomationFlow> updated) async {
-    // Tell the engine about deletions.
     final deletedIds = _flows
         .map((f) => f.id)
         .toSet()
@@ -238,7 +227,6 @@ class _MainShellState extends State<MainShell> {
       await _flowEngine.onFlowDeleted(id);
     }
 
-    // Initialise trigger state for newly added flows.
     final addedIds = updated
         .map((f) => f.id)
         .toSet()
@@ -275,10 +263,17 @@ class _MainShellState extends State<MainShell> {
 
   @override
   void dispose() {
+
+    _ble.onStatus = null;
+    _mqtt.onCommand = null;
+    _mqtt.onFlowsReceived = null;
+
     _ble.removeListener(_onBleStateChanged);
     _ble.dispose();
     _history.dispose();
     _energyLog.dispose();
+    // FIX B-2 (partial): dispose TapoService to close its HttpClient.
+    _tapo.dispose();
     _mqtt.dispose();
     super.dispose();
   }
@@ -387,10 +382,11 @@ class _MainShellState extends State<MainShell> {
       ];
     }
 
+    final safeIndex = _selectedIndex.clamp(0, tabScreens.length - 1);
+
     return Scaffold(
-      body: IndexedStack(index: _selectedIndex, children: tabScreens),
+      body: IndexedStack(index: safeIndex, children: tabScreens),
       bottomNavigationBar: Container(
-        // Integrates with edge-to-edge transparent system navigation bar colors
         color: Theme.of(context).colorScheme.surfaceContainerLow,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -401,13 +397,13 @@ class _MainShellState extends State<MainShell> {
               decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(
-                    color: Theme.of(context).colorScheme.outlineVariant, 
+                    color: Theme.of(context).colorScheme.outlineVariant,
                     width: 1,
                   ),
                 ),
               ),
               child: NavigationBar(
-                selectedIndex: _selectedIndex,
+                selectedIndex: safeIndex,
                 onDestinationSelected: (i) =>
                     setState(() => _selectedIndex = i),
                 destinations: destinations,
@@ -437,7 +433,7 @@ class _MqttModeStrip extends StatelessWidget {
         return Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.lg, 
+            horizontal: AppSpacing.lg,
             vertical: 6,
           ),
           color: bgColor,
@@ -463,24 +459,24 @@ class _MqttModeStrip extends StatelessWidget {
     final tag = mode == AppMode.gateway ? 'GATEWAY' : 'CLIENT';
     if (mqtt.isConnecting) {
       return (
-        AppColors.warningSurface, 
+        AppColors.warningSurface,
         AppColors.warning,
-        Icons.pending_rounded, 
+        Icons.pending_rounded,
         '$tag · Connecting…'
       );
     }
     if (mqtt.isConnected) {
       return (
-        AppColors.successSurface, 
+        AppColors.successSurface,
         AppColors.success,
-        Icons.cloud_done_rounded, 
+        Icons.cloud_done_rounded,
         '$tag · MQTT connected'
       );
     }
     return (
-      AppColors.errorSurface, 
+      AppColors.errorSurface,
       AppColors.error,
-      Icons.cloud_off_rounded, 
+      Icons.cloud_off_rounded,
       '$tag · MQTT disconnected — check Settings'
     );
   }

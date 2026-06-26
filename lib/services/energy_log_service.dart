@@ -77,11 +77,33 @@ final class EnergyLogService extends ChangeNotifier {
     await _storage.saveEnergyLog(_entries);
   }
 
-  /// Entries no older than [duration] from now.
+  /// Returns entries no older than [duration] from now.
   List<EnergyLogEntry> since(Duration duration) {
+    if (_entries.isEmpty) return const [];
+
     final cutoff = DateTime.now().toUtc().subtract(duration);
-    final idx = _entries.indexWhere((e) => !e.timestamp.isBefore(cutoff));
-    if (idx == -1) return const [];
+    final idx = _lowerBound(cutoff);
+    if (idx >= _entries.length) return const [];
     return _entries.sublist(idx);
+  }
+
+  /// Returns the index of the first entry whose timestamp is not before
+  /// [cutoff], using binary search on the sorted [_entries] list.
+  ///
+  /// Returns [_entries.length] if all entries are before [cutoff].
+  int _lowerBound(DateTime cutoff) {
+    int lo = 0;
+    int hi = _entries.length;
+    final cutoffMs = cutoff.millisecondsSinceEpoch;
+
+    while (lo < hi) {
+      final mid = lo + ((hi - lo) >> 1);
+      if (_entries[mid].timestamp.millisecondsSinceEpoch < cutoffMs) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
   }
 }

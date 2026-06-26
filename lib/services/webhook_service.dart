@@ -8,6 +8,7 @@ import '../utils/logger.dart';
 /// automation sequence. The difference is what they return:
 /// - [fire] returns a simple bool (used by the engine where only success/fail matters).
 /// - [test] returns the raw status code or null (used by test buttons in the UI).
+
 final class WebhookService {
   static const _timeout = Duration(seconds: 8);
 
@@ -21,6 +22,8 @@ final class WebhookService {
       Log.w('WebhookService', 'Invalid URL: $url');
       return false;
     }
+
+    _warnIfInsecure(uri);
 
     try {
       final response = await http.get(uri).timeout(_timeout);
@@ -44,6 +47,8 @@ final class WebhookService {
       return null;
     }
 
+    _warnIfInsecure(uri);
+
     try {
       final response = await http.get(uri).timeout(_timeout);
       Log.d('WebhookService', 'test → ${response.statusCode} ($url)');
@@ -62,6 +67,16 @@ final class WebhookService {
       return uri;
     } catch (_) {
       return null;
+    }
+  }
+
+  void _warnIfInsecure(Uri uri) {
+    if (uri.scheme == 'http') {
+      Log.w(
+        'WebhookService',
+        'Webhook URL uses plain HTTP — token/query parameters will be '
+        'transmitted in cleartext. Consider using HTTPS: ${uri.host}',
+      );
     }
   }
 }

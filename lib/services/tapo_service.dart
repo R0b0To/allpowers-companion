@@ -10,11 +10,15 @@ import 'package:pointycastle/export.dart';
 import '../utils/logger.dart';
 
 /// Controls a TP-Link Tapo smart plug via the local KLAP protocol.
+
 final class TapoService {
+
   final HttpClient _httpClient = HttpClient();
   final Map<String, _TapoSession> _sessions = {};
+  bool _disposed = false;
 
   _TapoSession _getOrCreateSession(String ip, String email, String password) {
+    _assertNotDisposed();
     final cleanIp = _normalizeIp(ip);
     final key = '$cleanIp:$email';
     return _sessions.putIfAbsent(
@@ -41,6 +45,7 @@ final class TapoService {
     required String email,
     required String password,
   }) async {
+    _assertNotDisposed();
     final session = _getOrCreateSession(ip, email, password);
     session.reset();
 
@@ -61,6 +66,7 @@ final class TapoService {
     required String email,
     required String password,
   }) async {
+    _assertNotDisposed();
     final session = _getOrCreateSession(ip, email, password);
     try {
       final info = await session.getDeviceInfo();
@@ -84,6 +90,7 @@ final class TapoService {
     required String password,
     required bool on,
   }) async {
+    _assertNotDisposed();
     final session = _getOrCreateSession(ip, email, password);
     final action = on ? 'ON' : 'OFF';
     try {
@@ -101,6 +108,29 @@ final class TapoService {
         Log.e('TapoService', 'setOn $action failed after retry', e2);
         return false;
       }
+    }
+  }
+
+  /// Releases the shared [HttpClient]. Must be called when the owning widget
+  /// is disposed (i.e. from [MainShell.dispose]).
+  ///
+  /// After [dispose] is called, all further method calls will throw a
+  /// [StateError].
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _sessions.clear();
+    // force: true closes the client even if requests are in-flight. Requests
+    // already awaited will complete with a SocketException which is caught
+    // by the callers' try-catch blocks.
+    _httpClient.close(force: true);
+    Log.i('TapoService', 'Disposed — HttpClient closed');
+  }
+
+  void _assertNotDisposed() {
+    if (_disposed) {
+      throw StateError(
+          'TapoService has been disposed and cannot be used further.');
     }
   }
 
@@ -189,7 +219,6 @@ final class _TapoSession {
     return true;
   }
 
-  // Corrected: Uses toUnsigned(32) to prevent negative sequence numbers
   int _int32BigEndian(Uint8List bytes) {
     return ((bytes[0] << 24) |
             (bytes[1] << 16) |
@@ -211,7 +240,6 @@ final class _TapoSession {
       ..fillRange(data.length, data.length + padLen, padLen);
   }
 
-  // Corrected: Added rigorous byte checks to unpad logic
   Uint8List _pkcs7Unpad(Uint8List data) {
     if (data.isEmpty) throw StateError('Cannot unpad empty data');
     final padLen = data.last;
@@ -226,8 +254,7 @@ final class _TapoSession {
     return data.sublist(0, data.length - padLen);
   }
 
-  Uint8List _aesCbcEncrypt(
-      Uint8List key, Uint8List iv, Uint8List padded) {
+  Uint8List _aesCbcEncrypt(Uint8List key, Uint8List iv, Uint8List padded) {
     final cipher = CBCBlockCipher(AESEngine())
       ..init(true, ParametersWithIV(KeyParameter(key), iv));
     final out = Uint8List(padded.length);
@@ -238,8 +265,7 @@ final class _TapoSession {
     return out;
   }
 
-  Uint8List _aesCbcDecrypt(
-      Uint8List key, Uint8List iv, Uint8List ciphertext) {
+  Uint8List _aesCbcDecrypt(Uint8List key, Uint8List iv, Uint8List ciphertext) {
     final cipher = CBCBlockCipher(AESEngine())
       ..init(false, ParametersWithIV(KeyParameter(key), iv));
     final out = Uint8List(ciphertext.length);
@@ -382,7 +408,6 @@ final class _TapoSession {
   }
 
   Uint8List _encrypt(Uint8List plaintext) {
-    // Corrected: Wrap around toUnsigned(32) so the string counter in HTTP never has a minus sign
     _seq = (_seq + 1).toUnsigned(32);
     final seqBytes = _toInt32BigEndian(_seq);
     final aesIv = Uint8List(_iv!.length + seqBytes.length)
@@ -406,7 +431,6 @@ final class _TapoSession {
   }
 
   Uint8List _decrypt(Uint8List responseBytes) {
-    // Corrected: Prevents sublist RangeError crash if payload from plug is short or corrupted
     if (responseBytes.length < 32) {
       throw StateError(
           'Response too short (${responseBytes.length} bytes, expected ≥ 32)');

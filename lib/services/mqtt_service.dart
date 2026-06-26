@@ -8,7 +8,6 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 import '../models/mqtt_settings.dart';
 import '../models/power_station_status.dart';
 import '../utils/logger.dart';
-// Add import at top
 import '../models/automation_flow.dart';
 
 /// Manages the MQTT connection in both Gateway and Client modes.
@@ -22,15 +21,17 @@ import '../models/automation_flow.dart';
 ///    failures: it suppresses the [NoConnectionException] but also swallows
 ///    the error, leaving the app in a permanently-stuck connecting state.
 /// 3. If [connect()] succeeds, [autoReconnect] is enabled on the live client
-///    so subsequent network drops are handled automatically.
-/// 4. If [connect()] fails (or the broker never sends CONNACK), [_connect]
-///    catches the error, updates [lastError], and schedules a retry via
-///    [_scheduleReconnect] with exponential back-off (5 s → 60 s cap).
+///    so subsequent network drops are handled automatically by the library.
+/// 4. [_onDisconnected] now checks whether [autoReconnect] is
+///    already active before scheduling a manual retry. When the library owns
+///    reconnection (post first-connect), we let it do its job and only call
+///    [_scheduleReconnect] for the initial connection phase where autoReconnect
+///    has not yet been activated.
 ///
 /// ## "Missing Connection Acknowledgement" cause
 ///
 /// This error means the TCP handshake succeeded but the broker dropped the
-/// connection before sending a CONNACK.  The most common cause with HiveMQ
+/// connection before sending a CONNACK. The most common cause with HiveMQ
 /// Cloud is a TLS / port mismatch:
 ///   • Port 8883  →  TLS must be ON
 ///   • Port 1883  →  TLS must be OFF
@@ -65,6 +66,10 @@ final class MqttService extends ChangeNotifier {
   /// state when a command packet arrives from a client phone.
   void Function(String outlet, bool value)? onCommand;
 
+  /// Called on both gateway and client when a flows update arrives from
+  /// the other side. The handler is responsible for updating local state
+  /// and storage; this service just delivers the parsed list.
+  void Function(List<AutomationFlow> flows)? onFlowsReceived;
 
   PowerStationStatus get remoteStatus => _remoteStatus;
   bool get bleConnectedRemote => _bleConnectedRemote;
@@ -86,24 +91,20 @@ final class MqttService extends ChangeNotifier {
     }
   }
 
+  // ── Publish flows ─────────────────────────────────────────────────────────
 
-  /// Called on both gateway and client when a flows update arrives from
-/// the other side. The handler is responsible for updating local state
-/// and storage; this service just delivers the parsed list.
-void Function(List<AutomationFlow> flows)? onFlowsReceived;
-
-/// Publishes the full flows list (retained, QoS 1) so the other side
-/// picks it up immediately on connect.
-void publishFlows(List<AutomationFlow> flows) {
-  if (!_isConnected) return;
-  if (_settings.mode == AppMode.standalone) return;
-  _publish(
-    _settings.flowsTopic,
-    jsonEncode(flows.map((f) => f.toJson()).toList()),
-    retain: true,
-  );
-  Log.i('MqttService', 'Flows published (${flows.length} flow(s))');
-}
+  /// Publishes the full flows list (retained, QoS 1) so the other side
+  /// picks it up immediately on connect.
+  void publishFlows(List<AutomationFlow> flows) {
+    if (!_isConnected) return;
+    if (_settings.mode == AppMode.standalone) return;
+    _publish(
+      _settings.flowsTopic,
+      jsonEncode(flows.map((f) => f.toJson()).toList()),
+      retain: true,
+    );
+    Log.i('MqttService', 'Flows published (${flows.length} flow(s))');
+  }
 
   // ── Connect ───────────────────────────────────────────────────────────────
 
@@ -130,7 +131,6 @@ void publishFlows(List<AutomationFlow> flows) {
 
       // CRITICAL FIX: supplying this callback prevents mqtt_client from
       // throwing NoConnectionException as an unhandled exception.
-      // We read the failure from connect()'s return value instead.
       c.onFailedConnectionAttempt = (int attempt) {
         Log.w('MqttService', 'Connection attempt $attempt failed');
       };
@@ -138,8 +138,8 @@ void publishFlows(List<AutomationFlow> flows) {
       // DO NOT set autoReconnect here — see class-level doc comment.
 
       final connMsg = MqttConnectMessage()
-    .withClientIdentifier(id)
-    .startClean(); // Clean connection message without the incomplete Will QoS
+          .withClientIdentifier(id)
+          .startClean();
 
       if (_settings.username.isNotEmpty) {
         connMsg.authenticateAs(_settings.username, _settings.password);
@@ -155,10 +155,13 @@ void publishFlows(List<AutomationFlow> flows) {
       final status = await c.connect();
 
       if (status?.state == MqttConnectionState.connected) {
-        // ── Success ──────────────────────────────────────────────────────
         _reconnectAttempts = 0;
 
         // Safe to enable auto-reconnect now that the first connect worked.
+        // FIX B-3: autoReconnect is only set here (post first-connect) so
+        // that _onDisconnected can distinguish the initial-connect phase
+        // (where we need manual retry) from post-connect drops (where the
+        // library handles it).
         c.autoReconnect = true;
         c.onAutoReconnected = _onAutoReconnected;
 
@@ -169,7 +172,6 @@ void publishFlows(List<AutomationFlow> flows) {
         notifyListeners();
         Log.i('MqttService', 'Connected [${_settings.mode.name}]');
       } else {
-        // Broker responded but refused (e.g. bad credentials).
         final code = status?.returnCode?.name ?? 'no response';
         throw StateError('Broker refused connection: $code');
       }
@@ -232,17 +234,16 @@ void publishFlows(List<AutomationFlow> flows) {
     Log.i('MqttService', 'Auto-reconnected — re-subscribed');
   }
 
-  /// Called on an unsolicited disconnect (only fires when autoReconnect is
-  /// false, i.e. during the initial connect attempt or after [_disconnect]).
+
   void _onDisconnected() {
     final wasConnected = _isConnected;
     _isConnected = false;
     notifyListeners();
     Log.w('MqttService', 'Disconnected');
 
-    // Reconnect only for unexpected drops, not our own _disconnect() calls
-    // (which null out _client first).
-    if (wasConnected && _client != null) {
+
+    final libraryOwnsReconnect = _client?.autoReconnect ?? false;
+    if (wasConnected && _client != null && !libraryOwnsReconnect) {
       _scheduleReconnect();
     }
   }
@@ -257,16 +258,14 @@ void publishFlows(List<AutomationFlow> flows) {
 
     switch (_settings.mode) {
       case AppMode.gateway:
-  c.subscribe('${_settings.commandTopic}/+', MqttQos.atLeastOnce);
-  c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
-  Log.i('MqttService',
-      'Gateway subscribed to commands + flows');
+        c.subscribe('${_settings.commandTopic}/+', MqttQos.atLeastOnce);
+        c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
+        Log.i('MqttService', 'Gateway subscribed to commands + flows');
 
-case AppMode.client:
-  c.subscribe(_settings.statusTopic, MqttQos.atLeastOnce);
-  c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
-  Log.i('MqttService',
-      'Client subscribed to status + flows');
+      case AppMode.client:
+        c.subscribe(_settings.statusTopic, MqttQos.atLeastOnce);
+        c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
+        Log.i('MqttService', 'Client subscribed to status + flows');
 
       case AppMode.standalone:
         break;
@@ -275,45 +274,46 @@ case AppMode.client:
     _msgSub = c.updates?.listen(_onMessages);
   }
 
+  // ── Message dispatch ──────────────────────────────────────────────────────
 
-void _onMessages(List<MqttReceivedMessage<MqttMessage>> events) {
-  for (final event in events) {
-    final pub = event.payload as MqttPublishMessage;
-    final raw =
-        MqttPublishPayload.bytesToStringAsString(pub.payload.message);
-    try {
-      // Flows topic is shared — handled regardless of mode.
-      if (event.topic == _settings.flowsTopic) {
-        _handleFlowsSync(raw);
-        continue;
-      }
+  void _onMessages(List<MqttReceivedMessage<MqttMessage>> events) {
+    for (final event in events) {
+      final pub = event.payload as MqttPublishMessage;
+      final raw =
+          MqttPublishPayload.bytesToStringAsString(pub.payload.message);
+      try {
+        // Flows topic is shared — handled regardless of mode.
+        if (event.topic == _settings.flowsTopic) {
+          _handleFlowsSync(raw);
+          continue;
+        }
 
-      if (_settings.mode == AppMode.client &&
-          event.topic == _settings.statusTopic) {
-        _handleStatus(raw);
-      } else if (_settings.mode == AppMode.gateway &&
-          event.topic.startsWith(_settings.commandTopic)) {
-        _handleCommand(event.topic, raw);
+        if (_settings.mode == AppMode.client &&
+            event.topic == _settings.statusTopic) {
+          _handleStatus(raw);
+        } else if (_settings.mode == AppMode.gateway &&
+            event.topic.startsWith(_settings.commandTopic)) {
+          _handleCommand(event.topic, raw);
+        }
+      } catch (e) {
+        Log.e('MqttService', 'Parse error [${event.topic}]', e);
       }
-    } catch (e) {
-      Log.e('MqttService', 'Parse error [${event.topic}]', e);
     }
   }
-}
 
-void _handleFlowsSync(String raw) {
-  try {
-    final list = jsonDecode(raw) as List<dynamic>;
-    final flows = list
-        .map((j) => AutomationFlow.tryFromJson(j as Map<String, dynamic>))
-        .whereType<AutomationFlow>()
-        .toList();
-    Log.i('MqttService', 'Flows received (${flows.length} flow(s))');
-    onFlowsReceived?.call(flows);
-  } catch (e) {
-    Log.e('MqttService', 'Failed to parse flows payload', e);
+  void _handleFlowsSync(String raw) {
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      final flows = list
+          .map((j) => AutomationFlow.tryFromJson(j as Map<String, dynamic>))
+          .whereType<AutomationFlow>()
+          .toList();
+      Log.i('MqttService', 'Flows received (${flows.length} flow(s))');
+      onFlowsReceived?.call(flows);
+    } catch (e) {
+      Log.e('MqttService', 'Failed to parse flows payload', e);
+    }
   }
-}
 
   // ── Message handlers ──────────────────────────────────────────────────────
 
@@ -345,7 +345,6 @@ void _handleFlowsSync(String raw) {
     onCommand?.call(outlet, value);
   }
 
-
   // ── Publish ───────────────────────────────────────────────────────────────
 
   /// Gateway: forward the latest BLE status to all subscribed clients.
@@ -369,8 +368,6 @@ void _handleFlowsSync(String raw) {
       retain: true,
     );
   }
-
-
 
   /// Client: send an outlet-toggle command to the gateway.
   void sendCommand(String outlet, bool value) {
@@ -403,55 +400,51 @@ void _handleFlowsSync(String raw) {
     final c = MqttServerClient.withPort(s.brokerHost.trim(), testId, s.port);
     c.secure = s.useTls;
     c.keepAlivePeriod = 10;
-    // Suppress unhandled exception during the test connect.
     c.onFailedConnectionAttempt = (_) {};
 
     try {
-  final connMsg = MqttConnectMessage()
-      .withClientIdentifier(testId)
-      .startClean();
-  if (s.username.isNotEmpty) {
-    connMsg.authenticateAs(s.username, s.password);
-  }
-  c.connectionMessage = connMsg;
+      final connMsg = MqttConnectMessage()
+          .withClientIdentifier(testId)
+          .startClean();
+      if (s.username.isNotEmpty) {
+        connMsg.authenticateAs(s.username, s.password);
+      }
+      c.connectionMessage = connMsg;
 
-  final status =
-      await c.connect().timeout(const Duration(seconds: 10));
+      final status =
+          await c.connect().timeout(const Duration(seconds: 10));
 
-  // 1. Evaluate success BEFORE disconnecting (since disconnect mutates the state)
-  final isSuccess = status?.state == MqttConnectionState.connected ||
-      status?.returnCode == MqttConnectReturnCode.connectionAccepted;
+      final isSuccess = status?.state == MqttConnectionState.connected ||
+          status?.returnCode == MqttConnectReturnCode.connectionAccepted;
 
-  // 2. Safely close the temporary handshake connection
-  c.disconnect();
+      c.disconnect();
 
-  if (isSuccess) {
-    return 'Connected to ${s.brokerHost}:${s.port} ✓';
-  }
-  
-  return 'Connection failed — broker returned: '
-      '${status?.returnCode?.name ?? 'no response'}';
-} catch (e) {
-  c.disconnect();
-  return 'Error: ${_friendlyError(e)}';
-}
+      if (isSuccess) {
+        return 'Connected to ${s.brokerHost}:${s.port} ✓';
+      }
+
+      return 'Connection failed — broker returned: '
+          '${status?.returnCode?.name ?? 'no response'}';
+    } catch (e) {
+      c.disconnect();
+      return 'Error: ${_friendlyError(e)}';
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
- String _effectiveClientId() {
-  final baseId = _settings.clientId.trim().isNotEmpty 
-      ? _settings.clientId.trim() 
-      : 'ap';
-  final tag = _settings.mode == AppMode.gateway ? 'gw' : 'cl';
-  
-  // Appends '_gw' or '_cl' and a small random timestamp to guarantee uniqueness
-  return '${baseId}_${tag}_${DateTime.now().millisecondsSinceEpoch % 100000}';
-}
+
+  String _effectiveClientId() {
+    final baseId = _settings.clientId.trim().isNotEmpty
+        ? _settings.clientId.trim()
+        : 'ap';
+    final tag = _settings.mode == AppMode.gateway ? 'gw' : 'cl';
+
+    return '${baseId}_${tag}_${DateTime.now().microsecondsSinceEpoch}';
+  }
 
   String _friendlyError(Object e) {
     final s = e.toString();
-    // The specific error the user hit — TLS / port mismatch.
     if (s.contains('NoConnectionException') ||
         s.contains('Connection Acknowledgement') ||
         s.contains('no response')) {
@@ -484,6 +477,9 @@ void _handleFlowsSync(String raw) {
     _reconnectTimer?.cancel();
     _msgSub?.cancel();
     _client?.disconnect();
+    // Clear callbacks to prevent dangling references to disposed widgets.
+    onCommand = null;
+    onFlowsReceived = null;
     super.dispose();
   }
 }

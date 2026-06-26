@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -7,9 +8,20 @@ class ChartPoint {
   const ChartPoint(this.time, this.value);
   final DateTime time;
   final double value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChartPoint &&
+          other.time == time &&
+          other.value == value;
+
+  @override
+  int get hashCode => Object.hash(time, value);
 }
 
 /// One plotted line within a [TimeSeriesChart].
+
 class ChartSeries {
   const ChartSeries({
     required this.points,
@@ -22,6 +34,17 @@ class ChartSeries {
 
   /// Whether to draw a soft gradient fill under the line.
   final bool fillGradient;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChartSeries &&
+          other.color == color &&
+          other.fillGradient == fillGradient &&
+          listEquals(other.points, points);
+
+  @override
+  int get hashCode => Object.hash(color, fillGradient, Object.hashAll(points));
 }
 
 /// An interactive time-series line chart.
@@ -77,14 +100,12 @@ class TimeSeriesChart extends StatefulWidget {
 }
 
 class _TimeSeriesChartState extends State<TimeSeriesChart> {
-  // Cached in build(); read by the gesture handler (called after build).
   double _minX = 0;
   double _maxX = 1;
 
   void _handleTouch(double localX, double plotWidth) {
     if (plotWidth <= 0 || _maxX <= _minX) return;
 
-    // Report the raw interpolated time — smooth crosshair movement.
     final fraction = (localX / plotWidth).clamp(0.0, 1.0);
     final ms = _minX + fraction * (_maxX - _minX);
     widget.onSelect?.call(DateTime.fromMillisecondsSinceEpoch(ms.round()));
@@ -186,10 +207,10 @@ class _TimeSeriesChartState extends State<TimeSeriesChart> {
                         maxX: _maxX,
                         selectedTime: widget.selectedTime,
                         dotRadius: dotRadius,
-                        // Passing M3 resolved colors straight down to the painter
                         gridColor: theme.colorScheme.outlineVariant,
                         dotBgColor: theme.colorScheme.surfaceContainerLow,
-                        crosshairColor: theme.colorScheme.onSurfaceVariant.withOpacity(0.35),
+                        crosshairColor: theme.colorScheme.onSurfaceVariant
+                            .withOpacity(0.35),
                       ),
                       size: Size(plotW, widget.height),
                     ),
@@ -208,8 +229,8 @@ class _TimeSeriesChartState extends State<TimeSeriesChart> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: xTicks
-                  .map((t) =>
-                      Text(widget.timeLabel!(t), style: AppTypography.labelSm))
+                  .map((t) => Text(widget.timeLabel!(t),
+                      style: AppTypography.labelSm))
                   .toList(),
             ),
           ),
@@ -243,7 +264,6 @@ class _TimeSeriesPainter extends CustomPainter {
   final DateTime? selectedTime;
   final double dotRadius;
 
-  // Modern Dynamic Theme Properties
   final Color gridColor;
   final Color dotBgColor;
   final Color crosshairColor;
@@ -308,7 +328,6 @@ class _TimeSeriesPainter extends CustomPainter {
     for (final s in seriesList) {
       if (s.points.isEmpty) continue;
       final offsets = s.points.map((p) => _toOffset(p, size)).toList();
-      // Background ring so dots pop off the fill.
       final bgPaint = Paint()
         ..color = dotBgColor
         ..style = PaintingStyle.fill;
@@ -329,7 +348,6 @@ class _TimeSeriesPainter extends CustomPainter {
     final xFrac = ((selMs - minX) / (maxX - minX)).clamp(0.0, 1.0);
     final selX = xFrac * size.width;
 
-    // Vertical rule
     canvas.drawLine(
       Offset(selX, 0),
       Offset(selX, size.height),
@@ -338,7 +356,6 @@ class _TimeSeriesPainter extends CustomPainter {
         ..strokeWidth = 1,
     );
 
-    // Snap to nearest point per series → highlighted dot
     for (final s in seriesList) {
       if (s.points.isEmpty) continue;
       ChartPoint? nearest;
@@ -352,28 +369,37 @@ class _TimeSeriesPainter extends CustomPainter {
       }
       if (nearest == null) continue;
       final o = _toOffset(nearest, size);
-      // Halo
       canvas.drawCircle(
-          o, 9, Paint()..color = s.color.withOpacity(0.18)..style = PaintingStyle.fill);
-      // Ring
+          o,
+          9,
+          Paint()
+            ..color = s.color.withOpacity(0.18)
+            ..style = PaintingStyle.fill);
       canvas.drawCircle(
-          o, 5.5, Paint()..color = s.color.withOpacity(0.4)..style = PaintingStyle.fill);
-      // Core
+          o,
+          5.5,
+          Paint()
+            ..color = s.color.withOpacity(0.4)
+            ..style = PaintingStyle.fill);
       canvas.drawCircle(
           o, 3.5, Paint()..color = s.color..style = PaintingStyle.fill);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _TimeSeriesPainter old) =>
-      old.selectedTime != selectedTime ||
-      old.minX != minX ||
-      old.maxX != maxX ||
-      old.minY != minY ||
-      old.maxY != maxY ||
-      old.dotRadius != dotRadius ||
-      old.gridColor != gridColor ||
-      old.dotBgColor != dotBgColor ||
-      old.crosshairColor != crosshairColor ||
-      old.seriesList != seriesList;
+  bool shouldRepaint(covariant _TimeSeriesPainter old) {
+    if (old.selectedTime != selectedTime ||
+        old.minX != minX ||
+        old.maxX != maxX ||
+        old.minY != minY ||
+        old.maxY != maxY ||
+        old.dotRadius != dotRadius ||
+        old.gridColor != gridColor ||
+        old.dotBgColor != dotBgColor ||
+        old.crosshairColor != crosshairColor) {
+      return true;
+    }
+
+    return !listEquals(old.seriesList, seriesList);
+  }
 }

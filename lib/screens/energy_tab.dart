@@ -7,16 +7,10 @@ import '../theme/app_theme.dart';
 import '../widgets/line_chart_painter.dart';
 import '../widgets/metric_card.dart';
 
-// Expanded ranges to support narrower, more precise zoom intervals
 enum _Range { threeHours, sixHours, day, week, month, all }
 
 /// Displays battery and power trend graphs derived from [EnergyLogService]'s
 /// periodically-sampled history.
-///
-/// Upgraded with:
-/// - Granular 3h & 6h range filters to expand the chart X-axis.
-/// - Chronological stepping buttons on the detail card for exact hour-by-hour inspection.
-/// - Scrollable horizontal range selector to prevent screen overflow.
 class EnergyTab extends StatefulWidget {
   const EnergyTab({
     super.key,
@@ -35,7 +29,6 @@ class _EnergyTabState extends State<EnergyTab> {
   _Range _range = _Range.day;
 
   /// Raw interpolated time reported by either chart's drag gesture.
-  /// null = no active selection.
   DateTime? _selectedTime;
 
   Duration? get _rangeDuration => switch (_range) {
@@ -52,9 +45,9 @@ class _EnergyTabState extends State<EnergyTab> {
     return d == null ? widget.energyLog.entries : widget.energyLog.since(d);
   }
 
-  /// The entry closest to [time] within the currently filtered set, or null.
-  EnergyLogEntry? _nearestEntry(DateTime time) {
-    final entries = _filteredEntries();
+  /// The entry closest to [time] within [entries], or null.
+  EnergyLogEntry? _nearestEntry(
+      DateTime time, List<EnergyLogEntry> entries) {
     if (entries.isEmpty) return null;
     final ms = time.millisecondsSinceEpoch;
     EnergyLogEntry? nearest;
@@ -72,16 +65,15 @@ class _EnergyTabState extends State<EnergyTab> {
   void _onSelect(DateTime? t) => setState(() => _selectedTime = t);
   void _clearSelection() => setState(() => _selectedTime = null);
 
-  /// Steps the active selection forward or backward chronologically through the filtered list.
-  void _stepSelection(int offset) {
-    final entries = _filteredEntries();
+  void _stepSelection(int offset, List<EnergyLogEntry> entries) {
     if (entries.isEmpty) return;
 
-    final selectedEntry = _selectedTime != null ? _nearestEntry(_selectedTime!) : null;
+    final selectedEntry =
+        _selectedTime != null ? _nearestEntry(_selectedTime!, entries) : null;
     if (selectedEntry == null) {
-      // If nothing is selected, start at the first or last entry depending on direction
       setState(() {
-        _selectedTime = offset > 0 ? entries.first.timestamp : entries.last.timestamp;
+        _selectedTime =
+            offset > 0 ? entries.first.timestamp : entries.last.timestamp;
       });
       return;
     }
@@ -111,13 +103,16 @@ class _EnergyTabState extends State<EnergyTab> {
     }
 
     final s = widget.strings;
+
     final entries = _filteredEntries();
-    
-    // Determine details for stepping index tracking
-    final selectedEntry = _selectedTime != null ? _nearestEntry(_selectedTime!) : null;
-    final int selectedIndex = selectedEntry != null ? entries.indexOf(selectedEntry) : -1;
+
+    final selectedEntry =
+        _selectedTime != null ? _nearestEntry(_selectedTime!, entries) : null;
+    final int selectedIndex =
+        selectedEntry != null ? entries.indexOf(selectedEntry) : -1;
     final bool hasPrevious = selectedIndex > 0;
-    final bool hasNext = selectedIndex != -1 && selectedIndex < entries.length - 1;
+    final bool hasNext =
+        selectedIndex != -1 && selectedIndex < entries.length - 1;
 
     return CustomScrollView(
       slivers: [
@@ -156,7 +151,7 @@ class _EnergyTabState extends State<EnergyTab> {
                   strings: s,
                   onChanged: (r) => setState(() {
                     _range = r;
-                    _clearSelection(); // Clear to prevent out-of-bounds metrics
+                    _clearSelection();
                   }),
                 ),
                 const SizedBox(height: AppSpacing.xxl),
@@ -196,11 +191,9 @@ class _EnergyTabState extends State<EnergyTab> {
             ),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
-                // Aggregate stats strip
                 _StatsGrid(entries: entries, strings: s),
                 const SizedBox(height: AppSpacing.lg),
 
-                // ── Selection detail card with step controller ───────────────
                 AnimatedSize(
                   duration: const Duration(milliseconds: 200),
                   curve: Curves.easeOut,
@@ -212,8 +205,12 @@ class _EnergyTabState extends State<EnergyTab> {
                             entry: selectedEntry,
                             strings: s,
                             onDismiss: _clearSelection,
-                            onPrevious: hasPrevious ? () => _stepSelection(-1) : null,
-                            onNext: hasNext ? () => _stepSelection(1) : null,
+                            onPrevious: hasPrevious
+                                ? () => _stepSelection(-1, entries)
+                                : null,
+                            onNext: hasNext
+                                ? () => _stepSelection(1, entries)
+                                : null,
                           ),
                         )
                       : Padding(
@@ -406,18 +403,17 @@ class _DetailCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Step Back Chronologically
           IconButton(
             onPressed: onPrevious,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
             icon: Icon(
               Icons.chevron_left_rounded,
-              color: onPrevious != null ? AppColors.teal : AppColors.textDisabled,
+              color: onPrevious != null
+                  ? AppColors.teal
+                  : AppColors.textDisabled,
             ),
           ),
-          
-          // Timestamp
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -429,14 +425,10 @@ class _DetailCard extends StatelessWidget {
               ),
             ],
           ),
-
-          // Divider
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
             child: Container(width: 1, height: 32, color: AppColors.border),
           ),
-
-          // Metrics
           Expanded(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -463,8 +455,6 @@ class _DetailCard extends StatelessWidget {
               ],
             ),
           ),
-
-          // Step Forward Chronologically
           IconButton(
             onPressed: onNext,
             padding: EdgeInsets.zero,
@@ -474,10 +464,7 @@ class _DetailCard extends StatelessWidget {
               color: onNext != null ? AppColors.teal : AppColors.textDisabled,
             ),
           ),
-          
           const SizedBox(width: AppSpacing.xs),
-
-          // Dismiss
           GestureDetector(
             onTap: onDismiss,
             behavior: HitTestBehavior.opaque,
@@ -538,16 +525,15 @@ class _OutletStateColumn extends StatelessWidget {
       final color = active ? AppColors.teal : AppColors.textDisabled;
       return Container(
         margin: const EdgeInsets.only(bottom: 3),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
           color: color.withOpacity(active ? 0.12 : 0.06),
           borderRadius: AppRadius.xsBR,
         ),
         child: Text(
           label,
-          style: AppTypography.labelSm.copyWith(
-              color: color, fontSize: 8, letterSpacing: 0.3),
+          style: AppTypography.labelSm
+              .copyWith(color: color, fontSize: 8, letterSpacing: 0.3),
         ),
       );
     }
@@ -564,7 +550,7 @@ class _OutletStateColumn extends StatelessWidget {
   }
 }
 
-// ── Range selector with Horizontal Scroll ────────────────────────────────────
+// ── Range selector ────────────────────────────────────────────────────────────
 
 class _RangeSelector extends StatelessWidget {
   const _RangeSelector({
@@ -579,13 +565,14 @@ class _RangeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+
     final options = {
       _Range.threeHours: '3h',
       _Range.sixHours: '6h',
-      _Range.day: strings.t('range_day') ?? '24h',
-      _Range.week: strings.t('range_week') ?? 'Week',
-      _Range.month: strings.t('range_month') ?? 'Month',
-      _Range.all: strings.t('range_all') ?? 'All',
+      _Range.day: strings.t('range_day'),
+      _Range.week: strings.t('range_week'),
+      _Range.month: strings.t('range_month'),
+      _Range.all: strings.t('range_all'),
     };
 
     return SingleChildScrollView(
@@ -600,7 +587,8 @@ class _RangeSelector extends StatelessWidget {
               onTap: () => onChanged(entry.key),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
                   color: selected
                       ? AppColors.tealSurface
@@ -617,8 +605,8 @@ class _RangeSelector extends StatelessWidget {
                   entry.value,
                   style: AppTypography.labelMd.copyWith(
                     color: selected
-                      ? AppColors.teal
-                      : AppColors.textSecondary,
+                        ? AppColors.teal
+                        : AppColors.textSecondary,
                   ),
                 ),
               ),
@@ -629,8 +617,6 @@ class _RangeSelector extends StatelessWidget {
     );
   }
 }
-
-// ... Rest of your unchanged helper classes (_ChartCard, _Legend, _StatsGrid) ...
 
 // ── Chart card wrapper ────────────────────────────────────────────────────────
 
@@ -704,19 +690,17 @@ class _StatsGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final inputs = entries.map((e) => e.inputWatts);
-    final outputs = entries.map((e) => e.outputWatts);
 
-    final avgIn = inputs.isEmpty
-        ? 0
-        : inputs.reduce((a, b) => a + b) ~/ inputs.length;
-    final avgOut = outputs.isEmpty
-        ? 0
-        : outputs.reduce((a, b) => a + b) ~/ outputs.length;
-    final peakIn =
-        inputs.isEmpty ? 0 : inputs.reduce((a, b) => a > b ? a : b);
-    final peakOut =
-        outputs.isEmpty ? 0 : outputs.reduce((a, b) => a > b ? a : b);
+    int sumIn = 0, sumOut = 0, peakIn = 0, peakOut = 0;
+    for (final e in entries) {
+      sumIn += e.inputWatts;
+      sumOut += e.outputWatts;
+      if (e.inputWatts > peakIn) peakIn = e.inputWatts;
+      if (e.outputWatts > peakOut) peakOut = e.outputWatts;
+    }
+    final count = entries.length;
+    final avgIn = count == 0 ? 0 : sumIn ~/ count;
+    final avgOut = count == 0 ? 0 : sumOut ~/ count;
 
     return Row(
       children: [
