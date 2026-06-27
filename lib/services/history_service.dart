@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/automation_history_entry.dart';
-import 'storage_service.dart';
+import '../repositories/history_repository.dart';
 
-/// In-memory cache of automation history, backed by [StorageService].
+/// In-memory cache of automation history, backed by [HistoryRepository].
 ///
 /// A [ChangeNotifier] so the History tab updates immediately when
 /// [FlowEngine] logs a new entry, without waiting on a SharedPreferences
@@ -15,9 +15,9 @@ import 'storage_service.dart';
 /// On the client, [replaceAll] is called when a history snapshot arrives,
 /// and [addEntry] is called for individual live entries.
 final class HistoryService extends ChangeNotifier {
-  HistoryService(this._storage);
+  HistoryService(this._repository);
 
-  final StorageService _storage;
+  final HistoryRepository _repository;
 
   List<AutomationHistoryEntry> _entries = const [];
   bool _isLoaded = false;
@@ -28,7 +28,7 @@ final class HistoryService extends ChangeNotifier {
 
   /// Must be called once during app bootstrap to restore persisted history.
   Future<void> init() async {
-    _entries = await _storage.loadAutomationHistory();
+    _entries = await _repository.loadHistory();
     _isLoaded = true;
     notifyListeners();
   }
@@ -45,7 +45,7 @@ final class HistoryService extends ChangeNotifier {
     }
     _entries = [entry, ..._entries];
     notifyListeners();
-    await _storage.saveAutomationHistory(_entries);
+    await _repository.saveHistory(_entries);
   }
 
   /// Replaces the entire list — used by clients receiving a full gateway
@@ -57,12 +57,12 @@ final class HistoryService extends ChangeNotifier {
     _entries = sorted;
     _isLoaded = true;
     notifyListeners();
-    await _storage.saveAutomationHistory(_entries);
+    await _repository.saveHistory(_entries);
   }
 
   Future<void> clear() async {
     _entries = const [];
     notifyListeners();
-    await _storage.saveAutomationHistory(_entries);
+    await _repository.saveHistory(_entries);
   }
 }

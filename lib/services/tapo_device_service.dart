@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../models/tapo_device.dart';
-import '../services/storage_service.dart';
-import '../services/tapo_service.dart';
+import '../repositories/tapo_repository.dart';
 import '../utils/logger.dart';
+import 'tapo_service.dart';
 
 /// Manages the list of saved Tapo smart plugs, polls their live state,
 /// and exposes toggle commands.
@@ -14,10 +14,10 @@ import '../utils/logger.dart';
 /// Individual device failures are isolated — one unreachable plug does not
 /// block others from updating.
 final class TapoDeviceService extends ChangeNotifier {
-  TapoDeviceService(this._tapo, this._storage);
+  TapoDeviceService(this._tapo, this._repository);
 
   final TapoService _tapo;
-  final StorageService _storage;
+  final TapoRepository _repository;
 
   static const pollInterval = Duration(seconds: 30);
 
@@ -31,7 +31,7 @@ final class TapoDeviceService extends ChangeNotifier {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   Future<void> init() async {
-    _devices = await _storage.loadTapoDevices();
+    _devices = await _repository.loadDevices();
     _isLoaded = true;
     notifyListeners();
     _startPolling();
@@ -40,7 +40,6 @@ final class TapoDeviceService extends ChangeNotifier {
   void _startPolling() {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(pollInterval, (_) => _pollAll());
-    // Immediate first poll.
     unawaited(_pollAll());
   }
 
@@ -54,8 +53,8 @@ final class TapoDeviceService extends ChangeNotifier {
 
     for (var i = 0; i < _devices.length; i++) {
       if (_devices[i].isOnline != updated[i].isOnline ||
-          _devices[i].isOn != updated[i].isOn ||
-          _devices[i].model != updated[i].model) {
+          _devices[i].isOn     != updated[i].isOn     ||
+          _devices[i].model    != updated[i].model) {
         changed = true;
       }
     }
@@ -69,15 +68,15 @@ final class TapoDeviceService extends ChangeNotifier {
   Future<TapoDevice> _pollDevice(TapoDevice device) async {
     try {
       final info = await _tapo.getDeviceInfo(
-        ip: device.ip,
-        email: device.email,
+        ip:       device.ip,
+        email:    device.email,
         password: device.password,
       );
       if (info == null) return device.copyWith(isOnline: false);
       return device.copyWith(
         isOnline: true,
-        isOn: info['device_on'] as bool? ?? false,
-        model: info['model'] as String? ?? '',
+        isOn:     info['device_on'] as bool?   ?? false,
+        model:    info['model']     as String? ?? '',
       );
     } catch (e) {
       Log.w('TapoDeviceService', 'Poll failed for ${device.name}: $e');
@@ -90,7 +89,7 @@ final class TapoDeviceService extends ChangeNotifier {
   Future<void> addDevice(TapoDevice device) async {
     _devices = [..._devices, device];
     notifyListeners();
-    await _storage.saveTapoDevices(_devices);
+    await _repository.saveDevices(_devices);
     unawaited(_pollDevice(device).then((updated) {
       final idx = _devices.indexWhere((d) => d.id == updated.id);
       if (idx != -1) {
@@ -104,14 +103,14 @@ final class TapoDeviceService extends ChangeNotifier {
     _devices = _devices.map((d) => d.id == device.id ? device : d).toList();
     _tapo.resetSession(ip: device.ip, email: device.email);
     notifyListeners();
-    await _storage.saveTapoDevices(_devices);
+    await _repository.saveDevices(_devices);
     unawaited(_pollAll());
   }
 
   Future<void> removeDevice(String id) async {
     _devices = _devices.where((d) => d.id != id).toList();
     notifyListeners();
-    await _storage.saveTapoDevices(_devices);
+    await _repository.saveDevices(_devices);
   }
 
   // ── Commands ───────────────────────────────────────────────────────────────
@@ -129,15 +128,15 @@ final class TapoDeviceService extends ChangeNotifier {
     notifyListeners();
 
     final ok = await _tapo.setOn(
-      ip: device.ip,
-      email: device.email,
+      ip:       device.ip,
+      email:    device.email,
       password: device.password,
-      on: on,
+      on:       on,
     );
 
     // Confirm with a real poll.
     final refreshed = await _pollDevice(device.copyWith(isOn: on));
-    final newIdx = _devices.indexWhere((d) => d.id == id);
+    final newIdx    = _devices.indexWhere((d) => d.id == id);
     if (newIdx != -1) {
       _devices = [..._devices]..[newIdx] = refreshed;
       notifyListeners();

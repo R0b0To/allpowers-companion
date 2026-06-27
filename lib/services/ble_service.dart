@@ -5,36 +5,19 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../constants/ble_constants.dart';
 import '../models/power_station_status.dart';
+import '../repositories/ble_repository.dart';
 import '../utils/logger.dart';
-import 'storage_service.dart';
 
 /// Owns the entire Bluetooth connection lifecycle: scanning, connecting,
 /// reconnecting to a previously paired station, decoding status packets,
 /// and sending outlet commands.
 ///
-/// ## Design notes
-///
-/// **Optimistic UI**: Outlet toggle commands update [status] immediately for
-/// instant feedback. Incoming status packets received within
-/// [BleConstants.manualOverrideWindow] after a command do not overwrite the
-/// socket fields, preventing visible flicker while the relay catches up.
-///
-/// **Auto-reconnect**: After an unexpected disconnect, the service schedules
-/// one retry via [BleConstants.reconnectDelay]. If BT is turned off, state
-/// is cleaned up but the saved device ID is preserved so auto-connect can
-/// resume when BT comes back on.
-///
-/// **Adapter guard**: All BLE operations are gated on the adapter being `on`;
-/// the adapter-state stream drives the connect/disconnect flow rather than
-/// manual polling.
-///
-/// **onStatus firing**: [onStatus] is invoked only when [status] actually
-/// changes. This prevents the flow engine, foreground service, and energy
-/// logger from doing unnecessary work on every raw BLE packet.
+/// See the previous review session for full design notes. The only
+/// dependency change here is [StorageService] → [BleRepository].
 class BleService extends ChangeNotifier {
-  BleService(this._storage);
+  BleService(this._repository);
 
-  final StorageService _storage;
+  final BleRepository _repository;
 
   // ── Public state ───────────────────────────────────────────────────────────
   List<ScanResult> scanResults = [];
@@ -46,6 +29,7 @@ class BleService extends ChangeNotifier {
   BluetoothAdapterState blueAdapterState = BluetoothAdapterState.unknown;
   String? lastError;
 
+  /// Only called when [status] actually changes (fixed in review session 1).
   void Function(PowerStationStatus status)? onStatus;
 
   // ── Private ────────────────────────────────────────────────────────────────
@@ -57,17 +41,8 @@ class BleService extends ChangeNotifier {
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
   StreamSubscription<BluetoothAdapterState>? _adapterSubscription;
 
-  /// The device ID we are trying to reconnect to. Retained in memory so
-  /// reconnect after an unexpected disconnect does not require a
-  /// SharedPreferences round-trip.
   String? _savedDeviceId;
-
-  /// The device currently being auto-connected. Retained so we can
-  /// disconnect it if auto-connect times out before completing.
   BluetoothDevice? _pendingAutoConnectDevice;
-
-  /// Tracks the last time a manual outlet command was sent, used to
-  /// suppress socket-state updates from BLE packets during the override window.
   DateTime _lastManualCommandTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool get _inManualOverrideWindow =>
@@ -77,14 +52,11 @@ class BleService extends ChangeNotifier {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   Future<void> init() async {
-    _adapterSubscription =
-        FlutterBluePlus.adapterState.listen(_onAdapterState);
-
-    _savedDeviceId = await _storage.getSavedDeviceId();
+    _adapterSubscription = FlutterBluePlus.adapterState.listen(_onAdapterState);
+    _savedDeviceId = await _repository.getSavedDeviceId();
     if (_savedDeviceId != null) {
       isAutoConnecting = true;
       notifyListeners();
-
       final currentState = await FlutterBluePlus.adapterState.first;
       if (currentState == BluetoothAdapterState.on) {
         await _autoConnect(_savedDeviceId!);
@@ -93,10 +65,9 @@ class BleService extends ChangeNotifier {
   }
 
   void _onAdapterState(BluetoothAdapterState state) {
-    if (state == blueAdapterState) return; // De-duplicate identical states.
+    if (state == blueAdapterState) return;
     blueAdapterState = state;
     notifyListeners();
-
     if (state == BluetoothAdapterState.on) {
       if (_savedDeviceId != null && !isConnected && !isAutoConnecting) {
         isAutoConnecting = true;
@@ -119,11 +90,8 @@ class BleService extends ChangeNotifier {
     });
 
     try {
-      // mtu: null is required when autoConnect: true — combining them triggers
-      // an assertion crash inside flutter_blue_plus on Android.
       unawaited(device.connect(autoConnect: true, mtu: null));
-      await connectedCompleter.future
-          .timeout(BleConstants.autoConnectTimeout);
+      await connectedCompleter.future.timeout(BleConstants.autoConnectTimeout);
     } on TimeoutException {
       Log.w('BleService', 'Auto-connect timed out for $deviceId');
       await _cleanupAfterFailedConnect(device);
@@ -135,66 +103,42 @@ class BleService extends ChangeNotifier {
     }
   }
 
-
   Future<void> _cleanupAfterFailedConnect(BluetoothDevice device) async {
-    // Cancel the connection subscription so the timed-out connection attempt
-    // cannot call _setupConnectedDevice if it resolves after the timeout.
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
-
-    try {
-      await device.disconnect();
-    } catch (_) {
-      // Best-effort; device may already be disconnected.
-    }
-
+    try { await device.disconnect(); } catch (_) {}
     isAutoConnecting = false;
     lastError = 'Connection timed out';
     notifyListeners();
-
-    if (blueAdapterState == BluetoothAdapterState.on) {
-      startScan();
-    }
+    if (blueAdapterState == BluetoothAdapterState.on) startScan();
   }
 
   // ── Scanning ───────────────────────────────────────────────────────────────
 
   void startScan() {
     if (blueAdapterState != BluetoothAdapterState.on) return;
-    if (isScanning) return; // Guard against double-start.
-
+    if (isScanning) return;
     _scanSubscription?.cancel();
     _isScanningSubscription?.cancel();
     scanResults = [];
     isScanning = true;
     lastError = null;
     notifyListeners();
-
     FlutterBluePlus.startScan(timeout: BleConstants.scanDuration);
-
     _scanSubscription = FlutterBluePlus.scanResults.listen(
-      (results) {
-        scanResults = results;
-        notifyListeners();
-      },
+      (results) { scanResults = results; notifyListeners(); },
       onError: (Object e) {
         Log.e('BleService', 'Scan error', e);
         lastError = 'Scan failed';
         notifyListeners();
       },
     );
-
     _isScanningSubscription = FlutterBluePlus.isScanning.listen((scanning) {
-      if (isScanning != scanning) {
-        isScanning = scanning;
-        notifyListeners();
-      }
+      if (isScanning != scanning) { isScanning = scanning; notifyListeners(); }
     });
   }
 
-  void stopScan() {
-    FlutterBluePlus.stopScan();
-  }
+  void stopScan() => FlutterBluePlus.stopScan();
 
   // ── Connecting ─────────────────────────────────────────────────────────────
 
@@ -202,10 +146,8 @@ class BleService extends ChangeNotifier {
     if (blueAdapterState != BluetoothAdapterState.on) return;
     stopScan();
     lastError = null;
-
     try {
       _watchConnectionState(device);
-      // mtu: null — see note in _autoConnect.
       await device.connect(mtu: null);
     } catch (e) {
       Log.e('BleService', 'Manual connect failed', e);
@@ -214,19 +156,12 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  void _watchConnectionState(
-    BluetoothDevice device, {
-    VoidCallback? onFirstConnect,
-  }) {
+  void _watchConnectionState(BluetoothDevice device, {VoidCallback? onFirstConnect}) {
     _connectionSubscription?.cancel();
     bool firstConnect = true;
-
     _connectionSubscription = device.connectionState.listen((state) {
       if (state == BluetoothConnectionState.connected) {
-        if (firstConnect) {
-          firstConnect = false;
-          onFirstConnect?.call();
-        }
+        if (firstConnect) { firstConnect = false; onFirstConnect?.call(); }
         unawaited(_setupConnectedDevice(device));
       } else if (state == BluetoothConnectionState.disconnected) {
         _handleDisconnect(retry: true);
@@ -234,10 +169,6 @@ class BleService extends ChangeNotifier {
     });
   }
 
-  /// Cleans up state after a disconnect.
-  ///
-  /// [retry] = true  → unexpected disconnect; schedule reconnect.
-  /// [retry] = false → intentional (user forgot device, BT turned off).
   void _handleDisconnect({required bool retry}) {
     _notifySubscription?.cancel();
     _notifySubscription = null;
@@ -246,9 +177,7 @@ class BleService extends ChangeNotifier {
     _readCharacteristic = null;
     _writeCharacteristic = null;
     notifyListeners();
-
-    if (retry && _savedDeviceId != null &&
-        blueAdapterState == BluetoothAdapterState.on) {
+    if (retry && _savedDeviceId != null && blueAdapterState == BluetoothAdapterState.on) {
       Log.i('BleService', 'Unexpected disconnect — scheduling reconnect in '
           '${BleConstants.reconnectDelay.inSeconds}s');
       isAutoConnecting = true;
@@ -264,9 +193,7 @@ class BleService extends ChangeNotifier {
   // ── Post-connect setup ─────────────────────────────────────────────────────
 
   Future<void> _setupConnectedDevice(BluetoothDevice device) async {
-    // Stop any ongoing scan now that we have a connection.
     stopScan();
-
     connectedDevice = device;
     isConnected = true;
     isAutoConnecting = false;
@@ -277,39 +204,25 @@ class BleService extends ChangeNotifier {
       final services = await device.discoverServices();
       BluetoothCharacteristic? readChar;
       BluetoothCharacteristic? writeChar;
-
       for (final service in services) {
         for (final char in service.characteristics) {
           final uuid = char.uuid.toString().toLowerCase();
-          // Take the last matching characteristic — later services are
-          // typically the application-level ones on Allpowers hardware.
-          if (BleConstants.readCharacteristicHints.any(uuid.contains)) {
-            readChar = char;
-          }
-          if (BleConstants.writeCharacteristicHints.any(uuid.contains)) {
-            writeChar = char;
-          }
+          if (BleConstants.readCharacteristicHints.any(uuid.contains))  readChar  = char;
+          if (BleConstants.writeCharacteristicHints.any(uuid.contains)) writeChar = char;
         }
       }
-
       if (readChar == null || writeChar == null) {
         Log.e('BleService', 'Required characteristics not found on ${device.platformName}');
         lastError = 'Device not supported — characteristics not found';
         notifyListeners();
         return;
       }
-
-      _readCharacteristic = readChar;
+      _readCharacteristic  = readChar;
       _writeCharacteristic = writeChar;
-
-      // Persist device ID so we auto-connect on next app launch.
       _savedDeviceId = device.remoteId.toString();
-      await _storage.setSavedDeviceId(_savedDeviceId!);
-
+      await _repository.setSavedDeviceId(_savedDeviceId!);
       await _readCharacteristic!.setNotifyValue(true);
-      _notifySubscription =
-          _readCharacteristic!.onValueReceived.listen(_parseStatusPacket);
-
+      _notifySubscription = _readCharacteristic!.onValueReceived.listen(_parseStatusPacket);
       await _writeData(BleConstants.requestStatusCommand);
       Log.i('BleService', 'Connected and subscribed to ${device.platformName}');
     } catch (e) {
@@ -324,22 +237,16 @@ class BleService extends ChangeNotifier {
   Future<void> forgetDevice() async {
     Log.i('BleService', 'Forgetting device');
     _savedDeviceId = null;
-    await _storage.clearSavedDeviceId();
-
+    await _repository.clearSavedDeviceId();
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
     _notifySubscription?.cancel();
     _notifySubscription = null;
-
     final device = connectedDevice;
     if (device != null) {
-      try {
-        await device.disconnect();
-      } catch (e) {
-        Log.w('BleService', 'Disconnect on forget failed (ignoring): $e');
-      }
+      try { await device.disconnect(); }
+      catch (e) { Log.w('BleService', 'Disconnect on forget failed (ignoring): $e'); }
     }
-
     connectedDevice = null;
     isConnected = false;
     isAutoConnecting = false;
@@ -347,7 +254,6 @@ class BleService extends ChangeNotifier {
     _writeCharacteristic = null;
     lastError = null;
     notifyListeners();
-
     startScan();
   }
 
@@ -355,48 +261,31 @@ class BleService extends ChangeNotifier {
 
   void _parseStatusPacket(List<int> bytes) {
     if (bytes.length < 6) return;
-
     final packetType = bytes[5];
     if (packetType != BleConstants.statusPacketType ||
-        bytes.length < BleConstants.minStatusPacketLength) {
-      return;
-    }
+        bytes.length < BleConstants.minStatusPacketLength) return;
 
-    final batteryLevel = bytes[BleConstants.batteryLevelOffset];
-    final inputWatts =
-        (bytes[BleConstants.inputWattsHighByteOffset] << 8) |
-        bytes[BleConstants.inputWattsHighByteOffset + 1];
-    final outputWatts =
-        (bytes[BleConstants.outputWattsHighByteOffset] << 8) |
-        bytes[BleConstants.outputWattsHighByteOffset + 1];
-
-    // Extract the minutes remaining (16-bit big-endian integer).
-    final minutesRemaining =
-        (bytes[BleConstants.minutesRemainingHighByteOffset] << 8) |
-        bytes[BleConstants.minutesRemainingHighByteOffset + 1];
+    final batteryLevel     = bytes[BleConstants.batteryLevelOffset];
+    final inputWatts       = (bytes[BleConstants.inputWattsHighByteOffset]       << 8) | bytes[BleConstants.inputWattsHighByteOffset + 1];
+    final outputWatts      = (bytes[BleConstants.outputWattsHighByteOffset]      << 8) | bytes[BleConstants.outputWattsHighByteOffset + 1];
+    final minutesRemaining = (bytes[BleConstants.minutesRemainingHighByteOffset] << 8) | bytes[BleConstants.minutesRemainingHighByteOffset + 1];
 
     final PowerStationStatus newStatus;
     if (_inManualOverrideWindow) {
       newStatus = status.copyWith(
-        batteryLevel: batteryLevel,
-        inputWatts: inputWatts,
-        outputWatts: outputWatts,
-        minutesRemaining: minutesRemaining,
-        // Socket fields preserved — relay may not have caught up yet.
+        batteryLevel: batteryLevel, inputWatts: inputWatts,
+        outputWatts: outputWatts, minutesRemaining: minutesRemaining,
       );
     } else {
       final socketMask = bytes[BleConstants.socketMaskOffset];
       newStatus = status.copyWith(
-        batteryLevel: batteryLevel,
-        inputWatts: inputWatts,
-        outputWatts: outputWatts,
-        minutesRemaining: minutesRemaining,
+        batteryLevel: batteryLevel, inputWatts: inputWatts,
+        outputWatts: outputWatts, minutesRemaining: minutesRemaining,
         isUsbOn: (socketMask & BleConstants.usbMask) != 0,
-        isAcOn: (socketMask & BleConstants.acMask) != 0,
-        isDcOn: (socketMask & BleConstants.dcMask) != 0,
+        isAcOn:  (socketMask & BleConstants.acMask)  != 0,
+        isDcOn:  (socketMask & BleConstants.dcMask)  != 0,
       );
     }
-
 
     if (newStatus != status) {
       status = newStatus;
@@ -408,39 +297,26 @@ class BleService extends ChangeNotifier {
   // ── Outlet commands ────────────────────────────────────────────────────────
 
   Future<void> setUsb(bool enable) => _setSocket(usb: enable);
-  Future<void> setAc(bool enable) => _setSocket(ac: enable);
-  Future<void> setDc(bool enable) => _setSocket(dc: enable);
+  Future<void> setAc(bool enable)  => _setSocket(ac: enable);
+  Future<void> setDc(bool enable)  => _setSocket(dc: enable);
 
   Future<void> _setSocket({bool? usb, bool? ac, bool? dc}) async {
-    // Optimistic update — mark override window before updating status so
-    // any in-flight BLE callback also sees it.
     _lastManualCommandTime = DateTime.now();
     status = status.copyWith(isUsbOn: usb, isAcOn: ac, isDcOn: dc);
     notifyListeners();
 
     int stateByte = 0;
     if (status.isUsbOn) stateByte |= BleConstants.usbMask;
-    if (status.isAcOn) stateByte |= BleConstants.acMask;
-    if (status.isDcOn) stateByte |= BleConstants.dcMask;
+    if (status.isAcOn)  stateByte |= BleConstants.acMask;
+    if (status.isDcOn)  stateByte |= BleConstants.dcMask;
 
     final payload = [
-      BleConstants.header1,
-      BleConstants.header2,
-      0x00,
-      0xb1,
-      0x01,
-      0x01,
-      0x00,
-      stateByte,
+      BleConstants.header1, BleConstants.header2, 0x00, 0xb1,
+      0x01, 0x01, 0x00, stateByte,
     ];
-
-    // XOR checksum over all preceding bytes.
     int checksum = 0;
-    for (final byte in payload) {
-      checksum ^= byte;
-    }
+    for (final byte in payload) checksum ^= byte;
     payload.add(checksum);
-
     await _writeData(payload);
   }
 
@@ -450,12 +326,8 @@ class BleService extends ChangeNotifier {
       Log.w('BleService', 'Write attempted with no characteristic — ignoring');
       return;
     }
-
     try {
-      await char.write(
-        payload,
-        withoutResponse: char.properties.writeWithoutResponse,
-      );
+      await char.write(payload, withoutResponse: char.properties.writeWithoutResponse);
     } catch (e) {
       Log.e('BleService', 'Write failed', e);
     }
@@ -470,9 +342,7 @@ class BleService extends ChangeNotifier {
     _isScanningSubscription?.cancel();
     _notifySubscription?.cancel();
     _connectionSubscription?.cancel();
-    try {
-      connectedDevice?.disconnect();
-    } catch (_) {}
+    try { connectedDevice?.disconnect(); } catch (_) {}
     super.dispose();
   }
 }

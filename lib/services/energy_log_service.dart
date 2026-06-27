@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/energy_log_entry.dart';
 import '../models/power_station_status.dart';
-import 'storage_service.dart';
+import '../repositories/energy_log_repository.dart';
 
 /// Records periodic snapshots of station metrics for the Energy tab.
 ///
@@ -18,15 +18,15 @@ import 'storage_service.dart';
 ///
 /// ## Storage model
 /// Entries are kept oldest-first in memory (convenient for charting) and
-/// persisted via [StorageService], which caps the stored count — see
-/// [StorageService] for the current limit and the rationale.
+/// persisted via [EnergyLogRepository], which caps the stored count at
+/// [EnergyLogRepository.maxEntries].
 final class EnergyLogService extends ChangeNotifier {
   EnergyLogService(
-    this._storage, {
+    this._repository, {
     this.interval = const Duration(minutes: 5),
   });
 
-  final StorageService _storage;
+  final EnergyLogRepository _repository;
 
   /// Minimum spacing between recorded samples.
   final Duration interval;
@@ -40,7 +40,7 @@ final class EnergyLogService extends ChangeNotifier {
 
   /// Must be called once during app bootstrap to restore persisted samples.
   Future<void> init() async {
-    _entries = await _storage.loadEnergyLog();
+    _entries = await _repository.loadLog();
     _isLoaded = true;
     notifyListeners();
   }
@@ -57,30 +57,29 @@ final class EnergyLogService extends ChangeNotifier {
     }
 
     final entry = EnergyLogEntry(
-      timestamp: now,
+      timestamp:   now,
       batteryLevel: status.batteryLevel,
-      inputWatts: status.inputWatts,
+      inputWatts:  status.inputWatts,
       outputWatts: status.outputWatts,
-      isUsbOn: status.isUsbOn,
-      isAcOn: status.isAcOn,
-      isDcOn: status.isDcOn,
+      isUsbOn:     status.isUsbOn,
+      isAcOn:      status.isAcOn,
+      isDcOn:      status.isDcOn,
     );
 
     _entries = [..._entries, entry];
     notifyListeners();
-    await _storage.saveEnergyLog(_entries);
+    await _repository.saveLog(_entries);
   }
 
   Future<void> clear() async {
     _entries = const [];
     notifyListeners();
-    await _storage.saveEnergyLog(_entries);
+    await _repository.saveLog(_entries);
   }
 
   /// Returns entries no older than [duration] from now.
   List<EnergyLogEntry> since(Duration duration) {
     if (_entries.isEmpty) return const [];
-
     final cutoff = DateTime.now().toUtc().subtract(duration);
     final idx = _lowerBound(cutoff);
     if (idx >= _entries.length) return const [];
@@ -95,7 +94,6 @@ final class EnergyLogService extends ChangeNotifier {
     int lo = 0;
     int hi = _entries.length;
     final cutoffMs = cutoff.millisecondsSinceEpoch;
-
     while (lo < hi) {
       final mid = lo + ((hi - lo) >> 1);
       if (_entries[mid].timestamp.millisecondsSinceEpoch < cutoffMs) {

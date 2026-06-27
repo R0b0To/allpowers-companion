@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-
 import 'package:ap_companion/models/power_station_status.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -10,6 +9,7 @@ import '../models/automation_flow.dart';
 import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
 import '../models/mqtt_settings.dart';
+import '../repositories/app_repositories.dart';
 import '../services/ble_service.dart';
 import '../services/energy_log_service.dart';
 import '../services/flow_engine.dart';
@@ -17,7 +17,6 @@ import '../services/foreground_service.dart';
 import '../services/history_service.dart';
 import '../services/mqtt_service.dart';
 import '../services/notification_service.dart';
-import '../services/storage_service.dart';
 import '../services/tapo_device_service.dart';
 import '../services/tapo_service.dart';
 import '../services/webhook_service.dart';
@@ -37,35 +36,39 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  // ── Services ───────────────────────────────────────────────────────────────
-  final _storage = StorageService();
-  final _notifications = NotificationService();
-  final _webhooks = WebhookService();
-  final _tapo = TapoService();
-  final _mqtt = MqttService();
+  // ── Repository layer ───────────────────────────────────────────────────────
+  /// Single composition root. Each service receives only its specific
+  /// repository interface, keeping all services independently unit-testable.
+  final _repos = AppRepositories();
 
-  late final HistoryService _history;
-  late final EnergyLogService _energyLog;
-  late final BleService _ble;
-  late final TapoDeviceService _tapoDevices;
-  late final FlowEngine _flowEngine;
+  // ── Services ───────────────────────────────────────────────────────────────
+  final _notifications = NotificationService();
+  final _webhooks      = WebhookService();
+  final _tapo          = TapoService();
+  final _mqtt          = MqttService();
+
+  late final HistoryService     _history;
+  late final EnergyLogService   _energyLog;
+  late final BleService         _ble;
+  late final TapoDeviceService  _tapoDevices;
+  late final FlowEngine         _flowEngine;
 
   // ── MQTT publish throttling ────────────────────────────────────────────────
   DateTime? _lastMqttPublishTime;
   bool? _lastAcState;
   bool? _lastDcState;
   bool? _lastUsbState;
+
+  // ── MQTT gateway history sync ──────────────────────────────────────────────
   int _lastKnownHistoryCount = 0;
 
   // ── State ──────────────────────────────────────────────────────────────────
-  AutomationSettings _settings = const AutomationSettings();
-  MqttSettings _mqttSettings = const MqttSettings();
-  List<AutomationFlow> _flows = [];
+  AutomationSettings _settings    = const AutomationSettings();
+  MqttSettings       _mqttSettings = const MqttSettings();
+  List<AutomationFlow> _flows     = [];
   bool _permissionsPermanentlyDenied = false;
-  int _selectedIndex = 0;
-  bool _bootstrapped = false;
-
-
+  int  _selectedIndex = 0;
+  bool _bootstrapped  = false;
   bool _applyingRemoteFlows = false;
 
   @override
@@ -73,12 +76,14 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     AppTheme.applySystemOverlay();
 
-    _history = HistoryService(_storage);
-    _energyLog = EnergyLogService(_storage);
-    _ble = BleService(_storage);
-    _tapoDevices = TapoDeviceService(_tapo, _storage);
-    _flowEngine = FlowEngine(
-        _ble, _webhooks, _tapo, _tapoDevices, _history, _storage);
+    // Each service receives only the repository interface it needs.
+    _history     = HistoryService(_repos.history);
+    _energyLog   = EnergyLogService(_repos.energyLog);
+    _ble         = BleService(_repos.ble);
+    _tapoDevices = TapoDeviceService(_tapo, _repos.tapo);
+    _flowEngine  = FlowEngine(
+      _ble, _webhooks, _tapo, _tapoDevices, _history, _repos.flows,
+    );
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
@@ -87,38 +92,37 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _bootstrap() async {
     await _notifications.init();
-
     if (!mounted) return;
 
     await _requestPermissions();
     if (!mounted) return;
 
+    // All three repository reads run in parallel — they share the same
+    // SharedPreferencesSource so only one native getInstance() call is made.
     final results = await Future.wait([
-      _storage.loadAutomationSettings(),
-      _storage.loadMqttSettings(),
-      _storage.loadFlows(),
+      _repos.automationSettings.load(),
+      _repos.mqttSettings.load(),
+      _repos.flows.loadFlows(),
     ]);
     if (!mounted) return;
 
     final autoSettings = results[0] as AutomationSettings;
     final mqttSettings = results[1] as MqttSettings;
-    final flows = results[2] as List<AutomationFlow>;
+    final flows        = results[2] as List<AutomationFlow>;
 
     setState(() {
-      _settings = autoSettings;
+      _settings     = autoSettings;
       _mqttSettings = mqttSettings;
-      _flows = flows;
+      _flows        = flows;
       _bootstrapped = true;
     });
 
-    // Register BLE listeners after bootstrap data is ready.
     _ble.addListener(_onBleStateChanged);
     _ble.onStatus = _onBleStatus;
 
     await _history.init();
     if (!mounted) return;
 
-    // Snapshot the current count so we don't treat pre-existing entries as new.
     _lastKnownHistoryCount = _history.entries.length;
     _history.addListener(_onHistoryChanged);
 
@@ -132,8 +136,8 @@ class _MainShellState extends State<MainShell> {
 
     _tapoDevices.addListener(_onTapoDevicesChanged);
 
-    _mqtt.onCommand = _onMqttCommand;
-    _mqtt.onFlowsReceived = _onMqttFlowsReceived;
+    _mqtt.onCommand         = _onMqttCommand;
+    _mqtt.onFlowsReceived   = _onMqttFlowsReceived;
     _mqtt.onHistoryReceived = _onMqttHistoryReceived;
     await _mqtt.configure(mqttSettings);
     if (!mounted) return;
@@ -147,7 +151,6 @@ class _MainShellState extends State<MainShell> {
   // ── BLE callbacks ──────────────────────────────────────────────────────────
 
   void _onBleStatus(PowerStationStatus status) {
-    // Note: this is only called when status actually changed (BleService fix).
     _notifications.handleBatteryLevel(status.batteryLevel);
     if (_mqttSettings.mode != AppMode.client) {
       _flowEngine.evaluate(_flows, _settings);
@@ -158,8 +161,8 @@ class _MainShellState extends State<MainShell> {
     if (_mqttSettings.mode == AppMode.gateway) {
       final now = DateTime.now();
       final stateChanged = _lastAcState == null ||
-          status.isAcOn != _lastAcState ||
-          status.isDcOn != _lastDcState ||
+          status.isAcOn  != _lastAcState ||
+          status.isDcOn  != _lastDcState ||
           status.isUsbOn != _lastUsbState;
 
       if (stateChanged ||
@@ -167,8 +170,8 @@ class _MainShellState extends State<MainShell> {
           now.difference(_lastMqttPublishTime!).inSeconds >= 5) {
         _mqtt.publishStatus(status, bleConnected: true);
         _lastMqttPublishTime = now;
-        _lastAcState = status.isAcOn;
-        _lastDcState = status.isDcOn;
+        _lastAcState  = status.isAcOn;
+        _lastDcState  = status.isDcOn;
         _lastUsbState = status.isUsbOn;
       }
     }
@@ -177,27 +180,26 @@ class _MainShellState extends State<MainShell> {
   void _onBleStateChanged() {
     ForegroundService.updateStatus(
       connected: _ble.isConnected,
-      status: _ble.isConnected ? _ble.status : null,
+      status:    _ble.isConnected ? _ble.status : null,
     );
     if (!_ble.isConnected && _mqttSettings.mode == AppMode.gateway) {
       _mqtt.publishStatus(_ble.status, bleConnected: false);
     }
   }
 
+  // ── History listener (gateway MQTT publish) ────────────────────────────────
 
   void _onHistoryChanged() {
     if (_mqttSettings.mode != AppMode.gateway) return;
     final entries = _history.entries;
     if (entries.length > _lastKnownHistoryCount && entries.isNotEmpty) {
-      // Only the first (newest) entry is truly new — publish it as a live event.
       _mqtt.publishHistoryEntry(entries.first);
-      // Update the retained snapshot so new clients get current history.
       _mqtt.publishHistorySnapshot(entries);
     }
     _lastKnownHistoryCount = entries.length;
   }
 
-  // ── Tapo device polling callback ───────────────────────────────────────────
+  // ── Tapo polling callback ──────────────────────────────────────────────────
 
   void _onTapoDevicesChanged() {
     if (_mqttSettings.mode != AppMode.client) {
@@ -211,12 +213,9 @@ class _MainShellState extends State<MainShell> {
     if (_mqttSettings.mode != AppMode.gateway) return;
     if (!_ble.isConnected) return;
     switch (outlet) {
-      case 'usb':
-        _ble.setUsb(value);
-      case 'ac':
-        _ble.setAc(value);
-      case 'dc':
-        _ble.setDc(value);
+      case 'usb': _ble.setUsb(value);
+      case 'ac':  _ble.setAc(value);
+      case 'dc':  _ble.setDc(value);
     }
   }
 
@@ -245,12 +244,12 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _onSettingsChanged(AutomationSettings updated) async {
     setState(() => _settings = updated);
-    await _storage.saveAutomationSettings(updated);
+    await _repos.automationSettings.save(updated);
   }
 
   Future<void> _onMqttSettingsChanged(MqttSettings updated) async {
     final wasClient = _mqttSettings.mode == AppMode.client;
-    final nowClient = updated.mode == AppMode.client;
+    final nowClient = updated.mode    == AppMode.client;
 
     setState(() {
       _mqttSettings = updated;
@@ -258,7 +257,7 @@ class _MainShellState extends State<MainShell> {
       if (_selectedIndex > maxIndex) _selectedIndex = 0;
     });
 
-    await _storage.saveMqttSettings(updated);
+    await _repos.mqttSettings.save(updated);
     await _mqtt.configure(updated);
 
     if (!wasClient && nowClient) {
@@ -271,9 +270,7 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _onFlowsChanged(List<AutomationFlow> updated) async {
     await _applyFlows(updated);
-
-    if (!_applyingRemoteFlows &&
-        _mqttSettings.mode != AppMode.standalone) {
+    if (!_applyingRemoteFlows && _mqttSettings.mode != AppMode.standalone) {
       _mqtt.publishFlows(updated);
     }
   }
@@ -297,7 +294,7 @@ class _MainShellState extends State<MainShell> {
 
     if (!mounted) return;
     setState(() => _flows = updated);
-    await _storage.saveFlows(updated);
+    await _repos.flows.saveFlows(updated);
   }
 
   // ── Permissions ────────────────────────────────────────────────────────────
@@ -317,21 +314,21 @@ class _MainShellState extends State<MainShell> {
     });
   }
 
-  // ── Tab count helper ───────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
   int _tabCount(bool isClientMode) => isClientMode ? 3 : 5;
 
   // ── Dispose ────────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
-    // Remove listeners before disposing to avoid callbacks on dead objects.
     _history.removeListener(_onHistoryChanged);
     _tapoDevices.removeListener(_onTapoDevicesChanged);
     _ble.removeListener(_onBleStateChanged);
 
-    _ble.onStatus = null;
-    _mqtt.onCommand = null;
-    _mqtt.onFlowsReceived = null;
+    _ble.onStatus           = null;
+    _mqtt.onCommand         = null;
+    _mqtt.onFlowsReceived   = null;
     _mqtt.onHistoryReceived = null;
 
     _ble.dispose();
@@ -347,8 +344,8 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final isIt = Localizations.localeOf(context).languageCode == 'it';
-    final strings = AppStrings(isIt);
+    final isIt     = Localizations.localeOf(context).languageCode == 'it';
+    final strings  = AppStrings(isIt);
 
     if (!_bootstrapped) {
       return Scaffold(
@@ -362,7 +359,7 @@ class _MainShellState extends State<MainShell> {
 
     final isClientMode = _mqttSettings.mode == AppMode.client;
 
-    // ── Shared tabs ────────────────────────────────────────────────────────
+    // ── Tab screens ────────────────────────────────────────────────────────
     final controlTab = isClientMode
         ? MqttClientTab(mqtt: _mqtt, strings: strings)
         : ControlTab(
@@ -371,34 +368,32 @@ class _MainShellState extends State<MainShell> {
             permissionsPermanentlyDenied: _permissionsPermanentlyDenied,
           );
 
-    // AutomationsTab now owns both the flow list and the history list,
-    // reducing the nav bar from 6 → 5 tabs in standalone/gateway mode.
     final automationsTab = AutomationsTab(
-      flows: _flows,
-      settings: _settings,
-      strings: strings,
-      tapoDevices: _tapoDevices.devices,
-      history: _history,
+      flows:          _flows,
+      settings:       _settings,
+      strings:        strings,
+      tapoDevices:    _tapoDevices.devices,
+      history:        _history,
       onFlowsChanged: _onFlowsChanged,
-      isClientMode: isClientMode,
+      isClientMode:   isClientMode,
     );
 
     final settingsTab = SettingsTab(
-      settings: _settings,
-      mqttSettings: _mqttSettings,
-      mqtt: _mqtt,
-      strings: strings,
-      onSettingsChanged: _onSettingsChanged,
-      onMqttSettingsChanged: _onMqttSettingsChanged,
+      settings:               _settings,
+      mqttSettings:           _mqttSettings,
+      mqtt:                   _mqtt,
+      strings:                strings,
+      onSettingsChanged:      _onSettingsChanged,
+      onMqttSettingsChanged:  _onMqttSettingsChanged,
     );
 
     final devicesTab = DevicesTab(
       tapoDevices: _tapoDevices,
-      tapo: _tapo,
-      strings: strings,
+      tapo:        _tapo,
+      strings:     strings,
     );
 
-    // ── Tab layouts ────────────────────────────────────────────────────────
+    // ── Navigation ─────────────────────────────────────────────────────────
     final List<Widget> tabScreens;
     final List<NavigationDestination> destinations;
 
@@ -422,7 +417,6 @@ class _MainShellState extends State<MainShell> {
         ),
       ];
     } else {
-      // 5 tabs: Control | Devices | Automation+History | Energy | Settings
       tabScreens = [
         controlTab,
         devicesTab,
@@ -499,7 +493,7 @@ class _MqttModeStrip extends StatelessWidget {
   const _MqttModeStrip({required this.mqtt, required this.mode});
 
   final MqttService mqtt;
-  final AppMode mode;
+  final AppMode     mode;
 
   @override
   Widget build(BuildContext context) {
@@ -532,29 +526,17 @@ class _MqttModeStrip extends StatelessWidget {
     );
   }
 
-  (Color bg, Color fg, IconData icon, String label) _resolve() {
+  (Color, Color, IconData, String) _resolve() {
     final tag = mode == AppMode.gateway ? 'GATEWAY' : 'CLIENT';
     if (mqtt.isConnecting) {
-      return (
-        AppColors.warningSurface,
-        AppColors.warning,
-        Icons.pending_rounded,
-        '$tag · Connecting…'
-      );
+      return (AppColors.warningSurface, AppColors.warning,
+          Icons.pending_rounded, '$tag · Connecting…');
     }
     if (mqtt.isConnected) {
-      return (
-        AppColors.successSurface,
-        AppColors.success,
-        Icons.cloud_done_rounded,
-        '$tag · MQTT connected'
-      );
+      return (AppColors.successSurface, AppColors.success,
+          Icons.cloud_done_rounded, '$tag · MQTT connected');
     }
-    return (
-      AppColors.errorSurface,
-      AppColors.error,
-      Icons.cloud_off_rounded,
-      '$tag · MQTT disconnected — check Settings'
-    );
+    return (AppColors.errorSurface, AppColors.error,
+        Icons.cloud_off_rounded, '$tag · MQTT disconnected — check Settings');
   }
 }
