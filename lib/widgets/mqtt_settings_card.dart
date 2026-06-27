@@ -345,12 +345,12 @@ class _ModeSelector extends StatelessWidget {
                 horizontal: AppSpacing.md, vertical: AppSpacing.md),
             decoration: BoxDecoration(
               color: selected
-                  ? color.withOpacity(0.08)
+                  ? color.withValues(alpha:0.08)
                   : theme.colorScheme.surfaceContainer,
               borderRadius: AppRadius.mdBR,
               border: Border.all(
                 color: selected
-                    ? color.withOpacity(0.4)
+                    ? color.withValues(alpha:0.4)
                     : theme.colorScheme.outline,
                 width: selected ? 1.5 : 1,
               ),
@@ -363,7 +363,7 @@ class _ModeSelector extends StatelessWidget {
                   height: 32,
                   decoration: BoxDecoration(
                     color: selected
-                        ? color.withOpacity(0.15)
+                        ? color.withValues(alpha:0.15)
                         : theme.colorScheme.surface,
                     borderRadius: AppRadius.smBR,
                   ),
@@ -372,7 +372,7 @@ class _ModeSelector extends StatelessWidget {
                     size: 16,
                     color: selected
                         ? color
-                        : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                        : theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                   ),
                 ),
                 const SizedBox(width: AppSpacing.md),
@@ -391,7 +391,7 @@ class _ModeSelector extends StatelessWidget {
                       Text(
                         strings.t('mqtt_mode_${m.name}_sub'),
                         style: AppTypography.bodySm.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                          color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                         ),
                       ),
                     ],
@@ -427,9 +427,9 @@ class _ModeDescription extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.06),
+        color: color.withValues(alpha:0.06),
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: color.withOpacity(0.25)),
+        border: Border.all(color: color.withValues(alpha:0.25)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -440,7 +440,7 @@ class _ModeDescription extends StatelessWidget {
             child: Text(
               strings.t('mqtt_mode_${mode.name}_desc'),
               style:
-                  AppTypography.bodyMd.copyWith(color: color.withOpacity(0.9)),
+                  AppTypography.bodyMd.copyWith(color: color.withValues(alpha:0.9)),
             ),
           ),
         ],
@@ -474,9 +474,9 @@ class _ConnectionBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md, vertical: AppSpacing.sm),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha:0.08),
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha:0.3)),
       ),
       child: Row(
         children: [

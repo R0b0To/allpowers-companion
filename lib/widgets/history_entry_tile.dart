@@ -88,7 +88,7 @@ class HistoryEntryTile extends StatelessWidget {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: accent.withOpacity(0.12),
+              color: accent.withValues(alpha:0.12),
               borderRadius: AppRadius.smBR,
             ),
             child: Icon(_actionIcon, size: 18, color: accent),
@@ -131,7 +131,7 @@ class HistoryEntryTile extends StatelessWidget {
                         Icon(Icons.battery_std_rounded,
                             size: 12,
                             color: theme.colorScheme.onSurfaceVariant
-                                .withOpacity(0.6)),
+                                .withValues(alpha:0.6)),
                         const SizedBox(width: 4),
                         Text('${entry.batteryLevel}%',
                             style: AppTypography.bodySm.copyWith(
@@ -145,7 +145,7 @@ class HistoryEntryTile extends StatelessWidget {
                         Icon(_methodIcon,
                             size: 12,
                             color: theme.colorScheme.onSurfaceVariant
-                                .withOpacity(0.6)),
+                                .withValues(alpha:0.6)),
                         const SizedBox(width: 4),
                         Text(_methodLabel(context),
                             style: AppTypography.bodySm.copyWith(
@@ -160,7 +160,7 @@ class HistoryEntryTile extends StatelessWidget {
                           Icon(Icons.electrical_services_rounded,
                               size: 12,
                               color: theme.colorScheme.onSurfaceVariant
-                                  .withOpacity(0.6)),
+                                  .withValues(alpha:0.6)),
                           const SizedBox(width: 4),
                           Text(entry.deviceName,
                               style: AppTypography.bodySm.copyWith(
@@ -186,13 +186,13 @@ class HistoryEntryTile extends StatelessWidget {
                         Icon(Icons.auto_mode_rounded,
                             size: 10,
                             color: theme.colorScheme.onSurfaceVariant
-                                .withOpacity(0.6)),
+                                .withValues(alpha:0.6)),
                         const SizedBox(width: 3),
                         Text(
                           entry.flowName,
                           style: AppTypography.labelSm.copyWith(
                             color: theme.colorScheme.onSurfaceVariant
-                                .withOpacity(0.8),
+                                .withValues(alpha:0.8),
                           ),
                         ),
                       ],
@@ -221,7 +221,7 @@ class _StatusChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha:0.12),
         borderRadius: AppRadius.xsBR,
       ),
       child: Text(

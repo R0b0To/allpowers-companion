@@ -54,7 +54,7 @@ class StatusBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color: surface,
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha:0.3)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -74,7 +74,7 @@ class StatusBanner extends StatelessWidget {
               child: Icon(
                 Icons.close, 
                 size: 16, 
-                color: color.withOpacity(0.7),
+                color: color.withValues(alpha:0.7),
               ),
             ),
           ],

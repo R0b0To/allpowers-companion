@@ -196,7 +196,7 @@ class _DeviceCard extends StatelessWidget {
         borderRadius: AppRadius.lgBR,
         border: Border.all(
           color: device.isOnline && device.isOn
-              ? AppColors.warning.withOpacity(0.4)
+              ? AppColors.warning.withValues(alpha:0.4)
               : theme.colorScheme.outline,
           width: device.isOnline && device.isOn ? 1.5 : 1,
         ),
@@ -241,13 +241,13 @@ class _DeviceCard extends StatelessWidget {
                   icon: Icon(Icons.edit_outlined,
                       size: 18,
                       color: theme.colorScheme.onSurfaceVariant
-                          .withOpacity(0.6)),
+                          .withValues(alpha:0.6)),
                 ),
                 // Delete button
                 IconButton(
                   onPressed: onDelete,
                   icon: Icon(Icons.delete_outline_rounded,
-                      size: 18, color: AppColors.error.withOpacity(0.7)),
+                      size: 18, color: AppColors.error.withValues(alpha:0.7)),
                 ),
               ],
             ),
@@ -310,7 +310,7 @@ class _InfoCard extends StatelessWidget {
                 width: 28,
                 height: 28,
                 decoration: BoxDecoration(
-                  color: AppColors.info.withOpacity(0.12),
+                  color: AppColors.info.withValues(alpha:0.12),
                   borderRadius: AppRadius.smBR,
                 ),
                 child: const Icon(Icons.wifi_rounded,
@@ -542,8 +542,8 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                     borderRadius: AppRadius.mdBR,
                     border: Border.all(
                       color: _testSuccess
-                          ? AppColors.success.withOpacity(0.3)
-                          : AppColors.error.withOpacity(0.3),
+                          ? AppColors.success.withValues(alpha:0.3)
+                          : AppColors.error.withValues(alpha:0.3),
                     ),
                   ),
                   child: Row(

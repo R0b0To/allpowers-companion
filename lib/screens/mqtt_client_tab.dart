@@ -111,7 +111,7 @@ class _MqttOfflineView extends StatelessWidget {
               child: Icon(
                 Icons.cloud_off_rounded,
                 size: 40, 
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
@@ -134,7 +134,7 @@ class _MqttOfflineView extends StatelessWidget {
                   color: theme.colorScheme.errorContainer,
                   borderRadius: AppRadius.mdBR,
                   border: Border.all(
-                    color: theme.colorScheme.error.withOpacity(0.3),
+                    color: theme.colorScheme.error.withValues(alpha:0.3),
                   ),
                 ),
                 child: Row(
@@ -196,7 +196,7 @@ class _GatewayOfflineView extends StatelessWidget {
                 color: AppColors.successSurface,
                 borderRadius: AppRadius.xsBR,
                 border: Border.all(
-                  color: AppColors.success.withOpacity(0.3),
+                  color: AppColors.success.withValues(alpha:0.3),
                 ),
               ),
               child: Row(
@@ -231,7 +231,7 @@ class _GatewayOfflineView extends StatelessWidget {
               child: Icon(
                 Icons.bluetooth_disabled_rounded,
                 size: 40, 
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
@@ -320,7 +320,7 @@ class _RemoteHeader extends StatelessWidget {
             color: theme.colorScheme.primaryContainer,
             borderRadius: AppRadius.xsBR,
             border: Border.all(
-              color: theme.colorScheme.primary.withOpacity(0.4),
+              color: theme.colorScheme.primary.withValues(alpha:0.4),
             ),
           ),
           child: Row(
@@ -430,7 +430,7 @@ class _RemoteBatteryRing extends StatelessWidget {
                           ? '$remaining to full'
                           : '$remaining left',
                       style: AppTypography.labelSm.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                        color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                       ),
                     ),
                   ],
@@ -506,7 +506,7 @@ class _RemoteOutletSection extends StatelessWidget {
             color: AppColors.infoSurface,
             borderRadius: AppRadius.xsBR,
             border: Border.all(
-              color: AppColors.info.withOpacity(0.25),
+              color: AppColors.info.withValues(alpha:0.25),
             ),
           ),
           child: Row(

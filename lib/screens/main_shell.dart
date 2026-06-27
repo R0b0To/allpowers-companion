@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:ap_companion/models/power_station_status.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -25,7 +26,6 @@ import 'automations_tab.dart';
 import 'control_tab.dart';
 import 'devices_tab.dart';
 import 'energy_tab.dart';
-import 'history_tab.dart';
 import 'mqtt_client_tab.dart';
 import 'settings_tab.dart';
 
@@ -55,6 +55,7 @@ class _MainShellState extends State<MainShell> {
   bool? _lastAcState;
   bool? _lastDcState;
   bool? _lastUsbState;
+  int _lastKnownHistoryCount = 0;
 
   // ── State ──────────────────────────────────────────────────────────────────
   AutomationSettings _settings = const AutomationSettings();
@@ -63,6 +64,7 @@ class _MainShellState extends State<MainShell> {
   bool _permissionsPermanentlyDenied = false;
   int _selectedIndex = 0;
   bool _bootstrapped = false;
+
 
   bool _applyingRemoteFlows = false;
 
@@ -85,18 +87,23 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _bootstrap() async {
     await _notifications.init();
+
+    if (!mounted) return;
+
     await _requestPermissions();
+    if (!mounted) return;
 
     final results = await Future.wait([
       _storage.loadAutomationSettings(),
       _storage.loadMqttSettings(),
       _storage.loadFlows(),
     ]);
+    if (!mounted) return;
+
     final autoSettings = results[0] as AutomationSettings;
     final mqttSettings = results[1] as MqttSettings;
     final flows = results[2] as List<AutomationFlow>;
 
-    if (!mounted) return;
     setState(() {
       _settings = autoSettings;
       _mqttSettings = mqttSettings;
@@ -104,22 +111,32 @@ class _MainShellState extends State<MainShell> {
       _bootstrapped = true;
     });
 
+    // Register BLE listeners after bootstrap data is ready.
     _ble.addListener(_onBleStateChanged);
     _ble.onStatus = _onBleStatus;
 
     await _history.init();
+    if (!mounted) return;
+
+    // Snapshot the current count so we don't treat pre-existing entries as new.
+    _lastKnownHistoryCount = _history.entries.length;
+    _history.addListener(_onHistoryChanged);
+
     await _energyLog.init();
     await _tapoDevices.init();
+    if (!mounted) return;
+
     await _flowEngine.init(flows);
     await _ble.init();
+    if (!mounted) return;
 
-    // Hook Tapo device updates to evaluate plug-state triggers.
     _tapoDevices.addListener(_onTapoDevicesChanged);
 
     _mqtt.onCommand = _onMqttCommand;
     _mqtt.onFlowsReceived = _onMqttFlowsReceived;
     _mqtt.onHistoryReceived = _onMqttHistoryReceived;
     await _mqtt.configure(mqttSettings);
+    if (!mounted) return;
 
     if (mqttSettings.mode != AppMode.client) {
       await ForegroundService.start();
@@ -129,7 +146,8 @@ class _MainShellState extends State<MainShell> {
 
   // ── BLE callbacks ──────────────────────────────────────────────────────────
 
-  void _onBleStatus(status) {
+  void _onBleStatus(PowerStationStatus status) {
+    // Note: this is only called when status actually changed (BleService fix).
     _notifications.handleBatteryLevel(status.batteryLevel);
     if (_mqttSettings.mode != AppMode.client) {
       _flowEngine.evaluate(_flows, _settings);
@@ -166,10 +184,22 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+
+  void _onHistoryChanged() {
+    if (_mqttSettings.mode != AppMode.gateway) return;
+    final entries = _history.entries;
+    if (entries.length > _lastKnownHistoryCount && entries.isNotEmpty) {
+      // Only the first (newest) entry is truly new — publish it as a live event.
+      _mqtt.publishHistoryEntry(entries.first);
+      // Update the retained snapshot so new clients get current history.
+      _mqtt.publishHistorySnapshot(entries);
+    }
+    _lastKnownHistoryCount = entries.length;
+  }
+
   // ── Tapo device polling callback ───────────────────────────────────────────
 
   void _onTapoDevicesChanged() {
-    // Evaluate plug-state triggers whenever the poll cycle completes.
     if (_mqttSettings.mode != AppMode.client) {
       _flowEngine.evaluateTapoTriggers(_flows, _settings);
     }
@@ -191,7 +221,7 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _onMqttFlowsReceived(List<AutomationFlow> flows) async {
-    if (!mounted) return;
+    if (!mounted || _applyingRemoteFlows) return;
     _applyingRemoteFlows = true;
     try {
       await _applyFlows(flows);
@@ -200,13 +230,10 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  /// Client: merge incoming history entries from the gateway.
-  /// Gateway: ignore (it already has them locally).
   Future<void> _onMqttHistoryReceived(
       List<AutomationHistoryEntry> entries) async {
     if (!mounted) return;
     if (_mqttSettings.mode != AppMode.client) return;
-    // For a snapshot (many entries), replace. For a single live entry, prepend.
     if (entries.length == 1) {
       await _history.addEntry(entries.first);
     } else {
@@ -227,7 +254,6 @@ class _MainShellState extends State<MainShell> {
 
     setState(() {
       _mqttSettings = updated;
-      // Clamp selected index to the new tab count.
       final maxIndex = _tabCount(nowClient) - 1;
       if (_selectedIndex > maxIndex) _selectedIndex = 0;
     });
@@ -292,20 +318,22 @@ class _MainShellState extends State<MainShell> {
   }
 
   // ── Tab count helper ───────────────────────────────────────────────────────
-
-  int _tabCount(bool isClientMode) => isClientMode ? 3 : 6;
+  int _tabCount(bool isClientMode) => isClientMode ? 3 : 5;
 
   // ── Dispose ────────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
+    // Remove listeners before disposing to avoid callbacks on dead objects.
+    _history.removeListener(_onHistoryChanged);
+    _tapoDevices.removeListener(_onTapoDevicesChanged);
+    _ble.removeListener(_onBleStateChanged);
+
     _ble.onStatus = null;
     _mqtt.onCommand = null;
     _mqtt.onFlowsReceived = null;
     _mqtt.onHistoryReceived = null;
 
-    _tapoDevices.removeListener(_onTapoDevicesChanged);
-    _ble.removeListener(_onBleStateChanged);
     _ble.dispose();
     _history.dispose();
     _energyLog.dispose();
@@ -343,26 +371,16 @@ class _MainShellState extends State<MainShell> {
             permissionsPermanentlyDenied: _permissionsPermanentlyDenied,
           );
 
+    // AutomationsTab now owns both the flow list and the history list,
+    // reducing the nav bar from 6 → 5 tabs in standalone/gateway mode.
     final automationsTab = AutomationsTab(
       flows: _flows,
       settings: _settings,
       strings: strings,
       tapoDevices: _tapoDevices.devices,
+      history: _history,
       onFlowsChanged: _onFlowsChanged,
       isClientMode: isClientMode,
-    );
-
-    // History tab: gateway publishes snapshot on first build so clients
-    // receive it. Rebuild listener wraps the tab so it reacts to addEntry.
-    final historyTab = _HistoryTabWithMqttPublish(
-      history: _history,
-      strings: strings,
-      onNewEntry: _mqttSettings.mode == AppMode.gateway
-          ? (entry) {
-              _mqtt.publishHistoryEntry(entry);
-              _mqtt.publishHistorySnapshot(_history.entries);
-            }
-          : null,
     );
 
     final settingsTab = SettingsTab(
@@ -404,12 +422,12 @@ class _MainShellState extends State<MainShell> {
         ),
       ];
     } else {
+      // 5 tabs: Control | Devices | Automation+History | Energy | Settings
       tabScreens = [
         controlTab,
         devicesTab,
         automationsTab,
         EnergyTab(energyLog: _energyLog, strings: strings),
-        historyTab,
         settingsTab,
       ];
       destinations = [
@@ -432,11 +450,6 @@ class _MainShellState extends State<MainShell> {
           icon: const Icon(Icons.show_chart_outlined),
           selectedIcon: const Icon(Icons.show_chart_rounded),
           label: strings.t('tab_energy'),
-        ),
-        NavigationDestination(
-          icon: const Icon(Icons.history_outlined),
-          selectedIcon: const Icon(Icons.history_rounded),
-          label: strings.t('tab_history'),
         ),
         const NavigationDestination(
           icon: Icon(Icons.settings_outlined),
@@ -461,8 +474,7 @@ class _MainShellState extends State<MainShell> {
               decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(
-                    color:
-                        Theme.of(context).colorScheme.outlineVariant,
+                    color: Theme.of(context).colorScheme.outlineVariant,
                     width: 1,
                   ),
                 ),
@@ -479,58 +491,6 @@ class _MainShellState extends State<MainShell> {
       ),
     );
   }
-}
-
-// ── History tab wrapper that publishes new entries to MQTT ────────────────────
-
-/// Thin wrapper around [HistoryTab] that calls [onNewEntry] whenever the
-/// gateway's history service gains a new entry (so clients receive it via MQTT).
-class _HistoryTabWithMqttPublish extends StatefulWidget {
-  const _HistoryTabWithMqttPublish({
-    required this.history,
-    required this.strings,
-    required this.onNewEntry,
-  });
-
-  final HistoryService history;
-  final AppStrings strings;
-  final void Function(AutomationHistoryEntry entry)? onNewEntry;
-
-  @override
-  State<_HistoryTabWithMqttPublish> createState() =>
-      _HistoryTabWithMqttPublishState();
-}
-
-class _HistoryTabWithMqttPublishState
-    extends State<_HistoryTabWithMqttPublish> {
-  int _lastKnownCount = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _lastKnownCount = widget.history.entries.length;
-    widget.history.addListener(_onHistoryChanged);
-  }
-
-  void _onHistoryChanged() {
-    final entries = widget.history.entries;
-    if (entries.length > _lastKnownCount && entries.isNotEmpty) {
-      widget.onNewEntry?.call(entries.first);
-    }
-    _lastKnownCount = entries.length;
-  }
-
-  @override
-  void dispose() {
-    widget.history.removeListener(_onHistoryChanged);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => HistoryTab(
-        history: widget.history,
-        strings: widget.strings,
-      );
 }
 
 // ── MQTT mode strip ───────────────────────────────────────────────────────────

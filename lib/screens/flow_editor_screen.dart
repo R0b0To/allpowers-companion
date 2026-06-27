@@ -264,7 +264,7 @@ class _TriggerCard extends StatelessWidget {
                 Icon(
                   Icons.battery_std_rounded,
                   size: 16,
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 Text('Battery threshold', style: AppTypography.bodyMd),
@@ -297,7 +297,7 @@ class _TriggerCard extends StatelessWidget {
                 Icon(Icons.power_rounded,
                     size: 16,
                     color:
-                        theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
+                        theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
                 const SizedBox(width: AppSpacing.sm),
                 Text('Plug to monitor', style: AppTypography.bodyMd),
               ],
@@ -310,7 +310,7 @@ class _TriggerCard extends StatelessWidget {
                   color: AppColors.warningSurface,
                   borderRadius: AppRadius.mdBR,
                   border: Border.all(
-                      color: AppColors.warning.withOpacity(0.3)),
+                      color: AppColors.warning.withValues(alpha:0.3)),
                 ),
                 child: Text(
                   'No Tapo devices found. Add one in the Devices tab.',
@@ -358,7 +358,7 @@ class _TriggerCard extends StatelessWidget {
                 Icon(Icons.electric_bolt_rounded,
                     size: 16,
                     color:
-                        theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
+                        theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
                 const SizedBox(width: AppSpacing.sm),
                 Text('Trigger when plug is', style: AppTypography.bodyMd),
                 const Spacer(),
@@ -402,7 +402,7 @@ class _TriggerCard extends StatelessWidget {
               Icon(Icons.schedule_rounded,
                   size: 16,
                   color:
-                      theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
+                      theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
@@ -513,7 +513,7 @@ class _TimeTile extends StatelessWidget {
               Icon(Icons.schedule_outlined,
                   size: 14,
                   color: theme.colorScheme.onSurfaceVariant
-                      .withOpacity(0.6)),
+                      .withValues(alpha:0.6)),
               const SizedBox(width: AppSpacing.xs),
               Expanded(
                 child: Column(
@@ -602,7 +602,7 @@ class _ActionCard extends StatelessWidget {
                       Icons.drag_handle_rounded,
                       size: 20,
                       color: theme.colorScheme.onSurfaceVariant
-                          .withOpacity(0.4),
+                          .withValues(alpha:0.4),
                     ),
                   ),
                 ),
@@ -610,7 +610,7 @@ class _ActionCard extends StatelessWidget {
                   width: 28,
                   height: 28,
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.12),
+                    color: color.withValues(alpha:0.12),
                     borderRadius: AppRadius.smBR,
                   ),
                   child: Icon(icon, size: 14, color: color),
@@ -625,7 +625,7 @@ class _ActionCard extends StatelessWidget {
                   icon: Icon(Icons.close_rounded,
                       size: 18,
                       color: theme.colorScheme.onSurfaceVariant
-                          .withOpacity(0.6)),
+                          .withValues(alpha:0.6)),
                 ),
               ],
             ),
@@ -928,7 +928,7 @@ class _AddActionSheet extends StatelessWidget {
       (
         FlowActionType.wait,
         Icons.timer_outlined,
-        theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+        theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
         'Wait',
         'Pause for N seconds before the next step'
       ),
@@ -971,7 +971,7 @@ class _AddActionSheet extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
+                  color: color.withValues(alpha:0.12),
                   borderRadius: AppRadius.smBR,
                 ),
                 child: Icon(icon, color: color, size: 18),
@@ -1040,12 +1040,12 @@ class _ChoiceChip extends StatelessWidget {
             horizontal: AppSpacing.md, vertical: AppSpacing.sm),
         decoration: BoxDecoration(
           color: selected
-              ? color.withOpacity(0.12)
+              ? color.withValues(alpha:0.12)
               : theme.colorScheme.surfaceContainer,
           borderRadius: AppRadius.mdBR,
           border: Border.all(
             color: selected
-                ? color.withOpacity(0.4)
+                ? color.withValues(alpha:0.4)
                 : theme.colorScheme.outline,
             width: selected ? 1.5 : 1,
           ),
@@ -1058,7 +1058,7 @@ class _ChoiceChip extends StatelessWidget {
                 color: selected
                     ? color
                     : theme.colorScheme.onSurfaceVariant
-                        .withOpacity(0.6)),
+                        .withValues(alpha:0.6)),
             const SizedBox(width: AppSpacing.xs),
             Text(
               label,
@@ -1116,12 +1116,12 @@ class _Chip extends StatelessWidget {
             horizontal: AppSpacing.md, vertical: AppSpacing.xs),
         decoration: BoxDecoration(
           color: selected
-              ? color.withOpacity(0.15)
+              ? color.withValues(alpha:0.15)
               : theme.colorScheme.surfaceContainer,
           borderRadius: AppRadius.xsBR,
           border: Border.all(
             color: selected
-                ? color.withOpacity(0.5)
+                ? color.withValues(alpha:0.5)
                 : theme.colorScheme.outline,
           ),
         ),
@@ -1155,7 +1155,7 @@ class _EmptyActionsHint extends StatelessWidget {
         children: [
           Icon(Icons.playlist_add_rounded,
               size: 32,
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4)),
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.4)),
           const SizedBox(height: AppSpacing.md),
           Text('No steps yet', style: AppTypography.headingSm),
           const SizedBox(height: AppSpacing.xs),

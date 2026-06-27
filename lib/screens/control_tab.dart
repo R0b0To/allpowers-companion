@@ -80,7 +80,7 @@ class _BluetoothOffView extends StatelessWidget {
               child: Icon(
                 Icons.bluetooth_disabled_rounded,
                 size: 40,
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
@@ -235,7 +235,7 @@ class _ScanView extends StatelessWidget {
                     Icon(
                       Icons.radar_rounded,
                       size: 48,
-                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.4),
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     Text(
@@ -326,7 +326,7 @@ class _DeviceTile extends StatelessWidget {
             Icon(
               _signalIcon, 
               size: 12, 
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
             ),
             const SizedBox(width: 4),
             Text('$rssi dBm', style: AppTypography.labelSm),
@@ -362,7 +362,7 @@ class _PermissionsBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.warningSurface,
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+        border: Border.all(color: AppColors.warning.withValues(alpha:0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -385,14 +385,14 @@ class _PermissionsBanner extends StatelessWidget {
           Text(
             strings.t('permissions_required_body'),
             style: AppTypography.bodySm
-                .copyWith(color: AppColors.warning.withOpacity(0.8)),
+                .copyWith(color: AppColors.warning.withValues(alpha:0.8)),
           ),
           const SizedBox(height: AppSpacing.md),
           OutlinedButton(
             onPressed: openAppSettings,
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.warning,
-              side: BorderSide(color: AppColors.warning.withOpacity(0.5)),
+              side: BorderSide(color: AppColors.warning.withValues(alpha:0.5)),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -570,7 +570,7 @@ class _BatteryRing extends StatelessWidget {
                     Text(
                       status.isCharging ? '$remainingTime to full' : '$remainingTime left',
                       style: AppTypography.labelSm.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                        color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                       ),
                     ),
                   ],

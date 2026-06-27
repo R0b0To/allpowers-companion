@@ -41,7 +41,7 @@ class TimeSelectorTile extends StatelessWidget {
                 Icon(
                   Icons.schedule_outlined,
                   size: 16,
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
@@ -62,7 +62,7 @@ class TimeSelectorTile extends StatelessWidget {
                 Icon(
                   Icons.chevron_right,
                   size: 16,
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                 ),
               ],
             ),

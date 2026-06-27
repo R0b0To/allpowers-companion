@@ -210,7 +210,7 @@ class _TimeSeriesChartState extends State<TimeSeriesChart> {
                         gridColor: theme.colorScheme.outlineVariant,
                         dotBgColor: theme.colorScheme.surfaceContainerLow,
                         crosshairColor: theme.colorScheme.onSurfaceVariant
-                            .withOpacity(0.35),
+                            .withValues(alpha:0.35),
                       ),
                       size: Size(plotW, widget.height),
                     ),
@@ -302,7 +302,7 @@ class _TimeSeriesPainter extends CustomPainter {
           ..shader = LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [s.color.withOpacity(0.2), Colors.transparent],
+            colors: [s.color.withValues(alpha:0.2), Colors.transparent],
           ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
       );
     }
@@ -373,13 +373,13 @@ class _TimeSeriesPainter extends CustomPainter {
           o,
           9,
           Paint()
-            ..color = s.color.withOpacity(0.18)
+            ..color = s.color.withValues(alpha:0.18)
             ..style = PaintingStyle.fill);
       canvas.drawCircle(
           o,
           5.5,
           Paint()
-            ..color = s.color.withOpacity(0.4)
+            ..color = s.color.withValues(alpha:0.4)
             ..style = PaintingStyle.fill);
       canvas.drawCircle(
           o, 3.5, Paint()..color = s.color..style = PaintingStyle.fill);

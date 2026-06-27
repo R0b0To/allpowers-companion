@@ -37,7 +37,7 @@ class SectionCard extends StatelessWidget {
         borderRadius: AppRadius.lgBR,
         border: Border.all(
           color: isActive
-              ? theme.colorScheme.primary.withOpacity(0.4)
+              ? theme.colorScheme.primary.withValues(alpha:0.4)
               : theme.colorScheme.outline,
           width: isActive ? 1.5 : 1,
         ),
@@ -69,7 +69,7 @@ class SectionCard extends StatelessWidget {
               Text(
                 description!, 
                 style: AppTypography.bodyMd.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.8),
                 ),
               ),
             ],
@@ -110,7 +110,7 @@ class _IconBadge extends StatelessWidget {
         size: 18,
         color: isActive 
             ? theme.colorScheme.primary 
-            : theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+            : theme.colorScheme.onSurfaceVariant.withValues(alpha:0.8),
       ),
     );
   }

@@ -72,7 +72,7 @@ class HistoryTab extends StatelessWidget {
                         icon: Icon(
                           Icons.delete_outline_rounded,
                           color: theme.colorScheme.onSurfaceVariant
-                              .withOpacity(0.6),
+                              .withValues(alpha:0.6),
                         ),
                       ),
                   ],
@@ -98,7 +98,7 @@ class HistoryTab extends StatelessWidget {
                     Icon(
                       Icons.history_rounded,
                       size: 48,
-                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.4),
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     Text(
@@ -146,7 +146,7 @@ class HistoryTab extends StatelessWidget {
             child: Text(
               strings.t('cancel'),
               style: AppTypography.headingSm.copyWith(
-                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.7),
               ),
             ),
           ),

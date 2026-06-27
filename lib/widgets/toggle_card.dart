@@ -53,7 +53,7 @@ class ToggleCard extends StatelessWidget {
             ),
             decoration: BoxDecoration(
               color: isActive
-                  ? activeColor.withOpacity(0.08)
+                  ? activeColor.withValues(alpha:0.08)
                   : theme.colorScheme.surfaceContainerLow,
               borderRadius: AppRadius.lgBR,
               border: Border.all(
@@ -76,7 +76,7 @@ class ToggleCard extends StatelessWidget {
                   style: AppTypography.labelMd.copyWith(
                     color: isActive
                         ? theme.colorScheme.onSurface
-                        : theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                        : theme.colorScheme.onSurfaceVariant.withValues(alpha:0.8),
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -116,7 +116,7 @@ class _OutletIcon extends StatelessWidget {
       height: 40,
       decoration: BoxDecoration(
         color: isActive
-            ? activeColor.withOpacity(0.15)
+            ? activeColor.withValues(alpha:0.15)
             : theme.colorScheme.surfaceContainer,
         shape: BoxShape.circle,
       ),
@@ -125,7 +125,7 @@ class _OutletIcon extends StatelessWidget {
         size: 20,
         color: isActive 
             ? activeColor 
-            : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+            : theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
       ),
     );
   }
@@ -150,7 +150,7 @@ class _StatusPill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: isActive 
-            ? color.withOpacity(0.15) 
+            ? color.withValues(alpha:0.15) 
             : theme.colorScheme.surfaceContainer,
         borderRadius: AppRadius.xsBR,
       ),
@@ -159,7 +159,7 @@ class _StatusPill extends StatelessWidget {
         style: AppTypography.labelSm.copyWith(
           color: isActive 
               ? color 
-              : theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+              : theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
           fontSize: 9,
         ),
       ),

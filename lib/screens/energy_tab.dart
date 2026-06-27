@@ -398,7 +398,7 @@ class _DetailCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceElevated,
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: AppColors.teal.withOpacity(0.3)),
+        border: Border.all(color: AppColors.teal.withValues(alpha:0.3)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -527,7 +527,7 @@ class _OutletStateColumn extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 3),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          color: color.withOpacity(active ? 0.12 : 0.06),
+          color: color.withValues(alpha:active ? 0.12 : 0.06),
           borderRadius: AppRadius.xsBR,
         ),
         child: Text(
@@ -597,7 +597,7 @@ class _RangeSelector extends StatelessWidget {
                       BorderRadius.circular(AppRadius.full),
                   border: Border.all(
                     color: selected
-                        ? AppColors.teal.withOpacity(0.4)
+                        ? AppColors.teal.withValues(alpha:0.4)
                         : AppColors.border,
                   ),
                 ),
