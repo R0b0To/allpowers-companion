@@ -51,9 +51,6 @@ final class AutomationSettings {
   /// Whether at least one webhook action is configured for OFF.
   bool get hasOffAction => tapoOffUrl.isNotEmpty;
 
-  /// Legacy compat — always false now that Tapo is device-managed.
-  bool get hasLocalTapoCredentials => false;
-
   AutomationSettings copyWith({
     bool? enabled,
     String? tapoOnUrl,
