@@ -23,10 +23,6 @@ final class StorageService {
   static const _keyHighThreshold = 'high_threshold';
   static const _keyStartTime = 'start_time';
   static const _keyEndTime = 'end_time';
-  static const _keyUseLocalTapo = 'use_local_tapo';
-  static const _keyTapoIp = 'tapo_ip';
-  static const _keyTapoEmail = 'tapo_email';
-  static const _keyTapoPassword = 'tapo_password';
   static const _keyChargingTriggered = 'charging_triggered';
   static const _keyAutomationHistory = 'automation_history';
   static const _keyEnergyLog = 'energy_log';

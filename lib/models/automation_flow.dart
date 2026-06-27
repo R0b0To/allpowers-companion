@@ -247,12 +247,6 @@ List<AutomationFlow> buildDefaultFlows() => [
               id: newFlowId(), type: FlowActionType.wait, waitSeconds: 5),
           FlowAction(
               id: newFlowId(),
-              type: FlowActionType.controlTapo,
-              tapoOn: true),
-          FlowAction(
-              id: newFlowId(), type: FlowActionType.wait, waitSeconds: 10),
-          FlowAction(
-              id: newFlowId(),
               type: FlowActionType.setBleOutlet,
               outlet: BleOutlet.ac,
               outletOn: true),
@@ -273,10 +267,6 @@ List<AutomationFlow> buildDefaultFlows() => [
               type: FlowActionType.setBleOutlet,
               outlet: BleOutlet.ac,
               outletOn: true),
-          FlowAction(
-              id: newFlowId(),
-              type: FlowActionType.controlTapo,
-              tapoOn: false),
         ],
       ),
     ];

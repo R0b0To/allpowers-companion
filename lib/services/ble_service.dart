@@ -28,9 +28,9 @@ import 'storage_service.dart';
 /// the adapter-state stream drives the connect/disconnect flow rather than
 /// manual polling.
 ///
-/// **Thread safety**: All stream callbacks execute on the Flutter event loop,
-/// so there are no data races between callbacks. The [_sequenceLock] flag in
-/// [AutomationEngine] is the cross-service guard for long async sequences.
+/// **onStatus firing**: [onStatus] is invoked only when [status] actually
+/// changes. This prevents the flow engine, foreground service, and energy
+/// logger from doing unnecessary work on every raw BLE packet.
 class BleService extends ChangeNotifier {
   BleService(this._storage);
 
@@ -46,8 +46,6 @@ class BleService extends ChangeNotifier {
   BluetoothAdapterState blueAdapterState = BluetoothAdapterState.unknown;
   String? lastError;
 
-  /// Called each time a full status packet is decoded, after [status] has
-  /// already been updated. Use this to trigger automation logic.
   void Function(PowerStationStatus status)? onStatus;
 
   // ── Private ────────────────────────────────────────────────────────────────
@@ -63,6 +61,10 @@ class BleService extends ChangeNotifier {
   /// reconnect after an unexpected disconnect does not require a
   /// SharedPreferences round-trip.
   String? _savedDeviceId;
+
+  /// The device currently being auto-connected. Retained so we can
+  /// disconnect it if auto-connect times out before completing.
+  BluetoothDevice? _pendingAutoConnectDevice;
 
   /// Tracks the last time a manual outlet command was sent, used to
   /// suppress socket-state updates from BLE packets during the override window.
@@ -109,6 +111,7 @@ class BleService extends ChangeNotifier {
   Future<void> _autoConnect(String deviceId) async {
     Log.i('BleService', 'Auto-connecting to $deviceId');
     final device = BluetoothDevice.fromId(deviceId);
+    _pendingAutoConnectDevice = device;
     final connectedCompleter = Completer<void>();
 
     _watchConnectionState(device, onFirstConnect: () {
@@ -123,17 +126,32 @@ class BleService extends ChangeNotifier {
           .timeout(BleConstants.autoConnectTimeout);
     } on TimeoutException {
       Log.w('BleService', 'Auto-connect timed out for $deviceId');
-      _cleanupAfterFailedConnect();
+      await _cleanupAfterFailedConnect(device);
     } catch (e) {
       Log.e('BleService', 'Auto-connect failed', e);
-      _cleanupAfterFailedConnect();
+      await _cleanupAfterFailedConnect(device);
+    } finally {
+      _pendingAutoConnectDevice = null;
     }
   }
 
-  void _cleanupAfterFailedConnect() {
+
+  Future<void> _cleanupAfterFailedConnect(BluetoothDevice device) async {
+    // Cancel the connection subscription so the timed-out connection attempt
+    // cannot call _setupConnectedDevice if it resolves after the timeout.
+    _connectionSubscription?.cancel();
+    _connectionSubscription = null;
+
+    try {
+      await device.disconnect();
+    } catch (_) {
+      // Best-effort; device may already be disconnected.
+    }
+
     isAutoConnecting = false;
     lastError = 'Connection timed out';
     notifyListeners();
+
     if (blueAdapterState == BluetoothAdapterState.on) {
       startScan();
     }
@@ -246,6 +264,9 @@ class BleService extends ChangeNotifier {
   // ── Post-connect setup ─────────────────────────────────────────────────────
 
   Future<void> _setupConnectedDevice(BluetoothDevice device) async {
+    // Stop any ongoing scan now that we have a connection.
+    stopScan();
+
     connectedDevice = device;
     isConnected = true;
     isAutoConnecting = false;
@@ -348,40 +369,40 @@ class BleService extends ChangeNotifier {
     final outputWatts =
         (bytes[BleConstants.outputWattsHighByteOffset] << 8) |
         bytes[BleConstants.outputWattsHighByteOffset + 1];
-        
-    // Extract the minutes remaining (16-bit big-endian integer)
+
+    // Extract the minutes remaining (16-bit big-endian integer).
     final minutesRemaining =
         (bytes[BleConstants.minutesRemainingHighByteOffset] << 8) |
         bytes[BleConstants.minutesRemainingHighByteOffset + 1];
 
-    final newStatus = _inManualOverrideWindow
-        ? status.copyWith(
-            batteryLevel: batteryLevel,
-            inputWatts: inputWatts,
-            outputWatts: outputWatts,
-            minutesRemaining: minutesRemaining, // Include in manual override window
-            // Socket fields preserved — relay may not have caught up yet.
-          )
-        : (() {
-            final socketMask = bytes[BleConstants.socketMaskOffset];
-            return status.copyWith(
-              batteryLevel: batteryLevel,
-              inputWatts: inputWatts,
-              outputWatts: outputWatts,
-              minutesRemaining: minutesRemaining, // Include in normal status update
-              isUsbOn: (socketMask & BleConstants.usbMask) != 0,
-              isAcOn: (socketMask & BleConstants.acMask) != 0,
-              isDcOn: (socketMask & BleConstants.dcMask) != 0,
-            );
-          })();
+    final PowerStationStatus newStatus;
+    if (_inManualOverrideWindow) {
+      newStatus = status.copyWith(
+        batteryLevel: batteryLevel,
+        inputWatts: inputWatts,
+        outputWatts: outputWatts,
+        minutesRemaining: minutesRemaining,
+        // Socket fields preserved — relay may not have caught up yet.
+      );
+    } else {
+      final socketMask = bytes[BleConstants.socketMaskOffset];
+      newStatus = status.copyWith(
+        batteryLevel: batteryLevel,
+        inputWatts: inputWatts,
+        outputWatts: outputWatts,
+        minutesRemaining: minutesRemaining,
+        isUsbOn: (socketMask & BleConstants.usbMask) != 0,
+        isAcOn: (socketMask & BleConstants.acMask) != 0,
+        isDcOn: (socketMask & BleConstants.dcMask) != 0,
+      );
+    }
 
-    // Only notify if something actually changed.
+
     if (newStatus != status) {
       status = newStatus;
       notifyListeners();
+      onStatus?.call(status);
     }
-
-    onStatus?.call(status);
   }
 
   // ── Outlet commands ────────────────────────────────────────────────────────
