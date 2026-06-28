@@ -11,7 +11,7 @@ import '../widgets/toggle_card.dart';
 /// Control screen shown when the app is running in [AppMode.client].
 ///
 /// All data comes from the MQTT broker (via [MqttService.remoteStatus]) rather
-/// than a direct BLE connection. Outlet-toggle taps publish MQTT commands
+/// than a direct BLE connection. Outlet-toggle taps publish RPC commands
 /// which the gateway executes over BLE.
 ///
 /// The three nested states mirror [ControlTab]'s pattern:
@@ -69,14 +69,14 @@ class _MqttConnectingView extends StatelessWidget {
               width: 56,
               height: 56,
               child: CircularProgressIndicator(
-                strokeWidth: 3, 
+                strokeWidth: 3,
                 color: theme.colorScheme.primary,
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
             Text(
               strings.t('mqtt_connecting'),
-              style: AppTypography.headingMd, 
+              style: AppTypography.headingMd,
               textAlign: TextAlign.center,
             ),
           ],
@@ -111,14 +111,15 @@ class _MqttOfflineView extends StatelessWidget {
               ),
               child: Icon(
                 Icons.cloud_off_rounded,
-                size: 40, 
-                color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
+                size: 40,
+                color: theme.colorScheme.onSurfaceVariant
+                    .withValues(alpha: 0.6),
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
             Text(
               strings.t('mqtt_broker_offline'),
-              style: AppTypography.headingLg, 
+              style: AppTypography.headingLg,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -135,14 +136,15 @@ class _MqttOfflineView extends StatelessWidget {
                   color: theme.colorScheme.errorContainer,
                   borderRadius: AppRadius.mdBR,
                   border: Border.all(
-                    color: theme.colorScheme.error.withValues(alpha:0.3),
+                    color:
+                        theme.colorScheme.error.withValues(alpha: 0.3),
                   ),
                 ),
                 child: Row(
                   children: [
                     Icon(
                       Icons.error_outline,
-                      size: 16, 
+                      size: 16,
                       color: theme.colorScheme.error,
                     ),
                     const SizedBox(width: AppSpacing.sm),
@@ -161,7 +163,7 @@ class _MqttOfflineView extends StatelessWidget {
             const SizedBox(height: AppSpacing.xl),
             Text(
               strings.t('mqtt_configure_hint'),
-              style: AppTypography.labelSm, 
+              style: AppTypography.labelSm,
               textAlign: TextAlign.center,
             ),
           ],
@@ -187,17 +189,16 @@ class _GatewayOfflineView extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // MQTT connected badge using theme status mappings
             Container(
               padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md, 
+                horizontal: AppSpacing.md,
                 vertical: AppSpacing.xs,
               ),
               decoration: BoxDecoration(
                 color: AppColors.successSurface,
                 borderRadius: AppRadius.xsBR,
                 border: Border.all(
-                  color: AppColors.success.withValues(alpha:0.3),
+                  color: AppColors.success.withValues(alpha: 0.3),
                 ),
               ),
               child: Row(
@@ -231,20 +232,21 @@ class _GatewayOfflineView extends StatelessWidget {
               ),
               child: Icon(
                 Icons.bluetooth_disabled_rounded,
-                size: 40, 
-                color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
+                size: 40,
+                color: theme.colorScheme.onSurfaceVariant
+                    .withValues(alpha: 0.6),
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
             Text(
               strings.t('mqtt_gateway_ble_offline'),
-              style: AppTypography.headingLg, 
+              style: AppTypography.headingLg,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.sm),
             Text(
               strings.t('mqtt_gateway_ble_offline_body'),
-              style: AppTypography.bodyMd, 
+              style: AppTypography.bodyMd,
               textAlign: TextAlign.center,
             ),
           ],
@@ -281,8 +283,8 @@ class _RemoteStationView extends StatelessWidget {
               _RemoteMetricsRow(status: status, strings: strings),
               const SizedBox(height: AppSpacing.xl),
               _RemoteOutletSection(
-                mqtt: mqtt, 
-                status: status, 
+                mqtt: mqtt,
+                status: status,
                 strings: strings,
               ),
             ]),
@@ -314,14 +316,15 @@ class _RemoteHeader extends StatelessWidget {
     final theme = Theme.of(context);
     return Row(
       children: [
-        // MQTT link indicator using primaryContainer token (tealSurface)
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 4),
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm, vertical: 4),
           decoration: BoxDecoration(
             color: theme.colorScheme.primaryContainer,
             borderRadius: AppRadius.xsBR,
             border: Border.all(
-              color: theme.colorScheme.primary.withValues(alpha:0.4),
+              color:
+                  theme.colorScheme.primary.withValues(alpha: 0.4),
             ),
           ),
           child: Row(
@@ -329,7 +332,7 @@ class _RemoteHeader extends StatelessWidget {
             children: [
               Icon(
                 Icons.cloud_done_rounded,
-                size: 12, 
+                size: 12,
                 color: theme.colorScheme.primary,
               ),
               const SizedBox(width: 4),
@@ -382,7 +385,6 @@ class _RemoteBatteryRing extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // Uses tone-based background track container
               SizedBox.expand(
                 child: CircularProgressIndicator(
                   value: 1,
@@ -412,7 +414,7 @@ class _RemoteBatteryRing extends StatelessWidget {
                       children: [
                         const Icon(
                           Icons.bolt_rounded,
-                          size: 12, 
+                          size: 12,
                           color: AppColors.success,
                         ),
                         Text(
@@ -431,7 +433,8 @@ class _RemoteBatteryRing extends StatelessWidget {
                           ? '$remaining to full'
                           : '$remaining left',
                       style: AppTypography.labelSm.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.6),
                       ),
                     ),
                   ],
@@ -448,7 +451,8 @@ class _RemoteBatteryRing extends StatelessWidget {
 // ── Metrics ───────────────────────────────────────────────────────────────────
 
 class _RemoteMetricsRow extends StatelessWidget {
-  const _RemoteMetricsRow({required this.status, required this.strings});
+  const _RemoteMetricsRow(
+      {required this.status, required this.strings});
   final PowerStationStatus status;
   final AppStrings strings;
 
@@ -480,7 +484,7 @@ class _RemoteMetricsRow extends StatelessWidget {
 
 // ── Outlet controls ───────────────────────────────────────────────────────────
 
-class _RemoteOutletSection extends StatelessWidget {
+class _RemoteOutletSection extends StatefulWidget {
   const _RemoteOutletSection({
     required this.mqtt,
     required this.status,
@@ -491,36 +495,84 @@ class _RemoteOutletSection extends StatelessWidget {
   final AppStrings strings;
 
   @override
+  State<_RemoteOutletSection> createState() =>
+      _RemoteOutletSectionState();
+}
+
+class _RemoteOutletSectionState extends State<_RemoteOutletSection> {
+  // Per-outlet pending state: while an RPC is in-flight, show optimistic UI.
+  bool? _usbPending;
+  bool? _acPending;
+  bool? _dcPending;
+
+  Future<void> _toggle(
+    String outlet,
+    bool currentValue,
+    void Function(bool?) setPending,
+  ) async {
+    final next = !currentValue;
+    setState(() => setPending(next));
+    try {
+      final resp = await widget.mqtt.call(
+        RpcMethod.setOutlet,
+        {'outlet': outlet, 'value': next},
+      );
+      if (!resp.ok && mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(
+            content: Text(
+              resp.error ??
+                  'Failed to toggle $outlet',
+            ),
+          ));
+      }
+    } finally {
+      if (mounted) setState(() => setPending(null));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final status = widget.status;
+    final strings = widget.strings;
+
+    // Resolve displayed state: pending (optimistic) overrides confirmed.
+    final usbOn = _usbPending ?? status.isUsbOn;
+    final acOn = _acPending ?? status.isAcOn;
+    final dcOn = _dcPending ?? status.isDcOn;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(strings.t('controls'), style: AppTypography.labelLg),
         const SizedBox(height: AppSpacing.sm),
-        // Information block
         Container(
           padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm, 
+            horizontal: AppSpacing.sm,
             vertical: AppSpacing.xs,
           ),
           decoration: BoxDecoration(
             color: AppColors.infoSurface,
             borderRadius: AppRadius.xsBR,
             border: Border.all(
-              color: AppColors.info.withValues(alpha:0.25),
+              color: AppColors.info.withValues(alpha: 0.25),
             ),
           ),
           child: Row(
             children: [
               const Icon(
                 Icons.info_outline,
-                size: 12, 
+                size: 12,
                 color: AppColors.info,
               ),
               const SizedBox(width: AppSpacing.xs),
-              Text(
-                strings.t('mqtt_command_latency_note'),
-                style: AppTypography.labelSm.copyWith(color: AppColors.info),
+              Expanded(
+                child: Text(
+                  strings.t('mqtt_command_latency_note'),
+                  style: AppTypography.labelSm
+                      .copyWith(color: AppColors.info),
+                ),
               ),
             ],
           ),
@@ -535,14 +587,13 @@ class _RemoteOutletSection extends StatelessWidget {
                 title: strings.t('usb'),
                 activeLabel: strings.t('active'),
                 disabledLabel: strings.t('disabled'),
-                isActive: status.isUsbOn,
+                isActive: usbOn,
                 activeColor: AppColors.usb,
-                onTap: () async {
-  final resp = await mqtt.call(
-    RpcMethod.setOutlet,
-    {'outlet': 'usb', 'value': !status.isUsbOn},
-  );
-},
+                onTap: () => _toggle(
+                  'usb',
+                  status.isUsbOn,
+                  (v) => _usbPending = v,
+                ),
               ),
               const SizedBox(width: AppSpacing.sm),
               ToggleCard(
@@ -550,14 +601,13 @@ class _RemoteOutletSection extends StatelessWidget {
                 title: strings.t('ac'),
                 activeLabel: strings.t('active'),
                 disabledLabel: strings.t('disabled'),
-                isActive: status.isAcOn,
+                isActive: acOn,
                 activeColor: AppColors.ac,
-                onTap: () async {
-  final resp = await mqtt.call(
-    RpcMethod.setOutlet,
-    {'outlet': 'ac', 'value': !status.isAcOn},
-  );
-},
+                onTap: () => _toggle(
+                  'ac',
+                  status.isAcOn,
+                  (v) => _acPending = v,
+                ),
               ),
               const SizedBox(width: AppSpacing.sm),
               ToggleCard(
@@ -565,14 +615,13 @@ class _RemoteOutletSection extends StatelessWidget {
                 title: strings.t('dc'),
                 activeLabel: strings.t('active'),
                 disabledLabel: strings.t('disabled'),
-                isActive: status.isDcOn,
+                isActive: dcOn,
                 activeColor: AppColors.dc,
-                onTap: () async {
-  final resp = await mqtt.call(
-    RpcMethod.setOutlet,
-    {'outlet': 'dc', 'value': !status.isDcOn},
-  );
-},
+                onTap: () => _toggle(
+                  'dc',
+                  status.isDcOn,
+                  (v) => _dcPending = v,
+                ),
               ),
             ],
           ),

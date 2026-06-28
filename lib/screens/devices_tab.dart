@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../l10n/app_strings.dart';
+import '../models/mqtt_rpc_methods.dart';
 import '../models/tapo_device.dart';
+import '../services/mqtt_service.dart';
 import '../services/tapo_device_service.dart';
 import '../services/tapo_service.dart';
 import '../theme/app_theme.dart';
@@ -9,17 +11,33 @@ import '../widgets/toggle_card.dart';
 
 /// Lists all saved Tapo smart plugs, shows their live state, and lets the
 /// user add, edit, or remove devices.
+///
+/// In gateway/standalone mode, outlet toggles hit [TapoDeviceService] directly.
+/// In client mode, [mqttClient] is provided and outlet toggles go via RPC
+/// ([RpcMethod.tapoSetOn]), while add/edit/delete are disabled — device
+/// management must happen on the gateway phone.
 class DevicesTab extends StatelessWidget {
   const DevicesTab({
     super.key,
     required this.tapoDevices,
     required this.tapo,
     required this.strings,
+    // Null → local/gateway mode (direct control).
+    // Non-null → client mode (RPC control, read-only management).
+    this.mqttClient,
   });
 
   final TapoDeviceService tapoDevices;
   final TapoService tapo;
   final AppStrings strings;
+
+  /// When set, the tab runs in client mode:
+  /// - Plug state is received via MQTT (already in [tapoDevices] via replaceAll).
+  /// - Toggle commands are sent via [MqttService.call] → [RpcMethod.tapoSetOn].
+  /// - Add / edit / delete are hidden.
+  final MqttService? mqttClient;
+
+  bool get _isClientMode => mqttClient != null;
 
   @override
   Widget build(BuildContext context) {
@@ -54,24 +72,42 @@ class DevicesTab extends StatelessWidget {
                         style: AppTypography.displaySm,
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => tapoDevices.refresh(),
-                      tooltip: strings.t('devices_refresh'),
-                      icon: const Icon(Icons.refresh_rounded,
-                          color: AppColors.textTertiary),
-                    ),
-                    IconButton(
-                      onPressed: () => _showAddEditSheet(context, null),
-                      tooltip: strings.t('devices_add'),
-                      icon: const Icon(Icons.add_rounded, color: AppColors.teal),
-                    ),
+                    if (_isClientMode) ...[
+                      // Client mode: refresh via RPC, no add button.
+                      _RpcRefreshButton(
+                        mqtt: mqttClient!,
+                        strings: strings,
+                      ),
+                    ] else ...[
+                      // Local mode: direct refresh + add.
+                      IconButton(
+                        onPressed: () => tapoDevices.refresh(),
+                        tooltip: strings.t('devices_refresh'),
+                        icon: const Icon(Icons.refresh_rounded,
+                            color: AppColors.textTertiary),
+                      ),
+                      IconButton(
+                        onPressed: () =>
+                            _showAddEditSheet(context, null),
+                        tooltip: strings.t('devices_add'),
+                        icon: const Icon(Icons.add_rounded,
+                            color: AppColors.teal),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
-                  strings.t('devices_description'),
+                  _isClientMode
+                      ? 'Plug state synced from the gateway. '
+                          'Toggle plugs remotely via the gateway.'
+                      : strings.t('devices_description'),
                   style: AppTypography.bodyMd,
                 ),
+                if (_isClientMode) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  _ClientModeBanner(strings: strings),
+                ],
                 const SizedBox(height: AppSpacing.xxl),
               ],
             ),
@@ -84,7 +120,10 @@ class DevicesTab extends StatelessWidget {
             hasScrollBody: false,
             child: _EmptyDevicesView(
               strings: strings,
-              onAdd: () => _showAddEditSheet(context, null),
+              isClientMode: _isClientMode,
+              onAdd: _isClientMode
+                  ? null
+                  : () => _showAddEditSheet(context, null),
             ),
           )
         else
@@ -102,14 +141,45 @@ class DevicesTab extends StatelessWidget {
               itemBuilder: (context, i) => _DeviceCard(
                 device: devices[i],
                 strings: strings,
-                onToggle: (on) => tapoDevices.setDeviceOn(devices[i].id, on),
-                onEdit: () => _showAddEditSheet(context, devices[i]),
-                onDelete: () => _confirmDelete(context, devices[i]),
+                isClientMode: _isClientMode,
+                onToggle: (on) => _handleToggle(context, devices[i], on),
+                onEdit: _isClientMode
+                    ? null
+                    : () => _showAddEditSheet(context, devices[i]),
+                onDelete: _isClientMode
+                    ? null
+                    : () => _confirmDelete(context, devices[i]),
               ),
             ),
           ),
       ],
     );
+  }
+
+  // ── Actions ────────────────────────────────────────────────────────────────
+
+  Future<void> _handleToggle(
+    BuildContext context,
+    TapoDevice device,
+    bool on,
+  ) async {
+    if (_isClientMode) {
+      final resp = await mqttClient!.call(
+        RpcMethod.tapoSetOn,
+        {'deviceId': device.id, 'on': on},
+      );
+      if (!resp.ok && context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(
+            content: Text(
+              resp.error ?? 'Failed to toggle ${device.name}',
+            ),
+          ));
+      }
+    } else {
+      await tapoDevices.setDeviceOn(device.id, on);
+    }
   }
 
   void _showAddEditSheet(BuildContext context, TapoDevice? existing) {
@@ -132,7 +202,9 @@ class DevicesTab extends StatelessWidget {
   }
 
   Future<void> _confirmDelete(
-      BuildContext context, TapoDevice device) async {
+    BuildContext context,
+    TapoDevice device,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -148,15 +220,19 @@ class DevicesTab extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(strings.t('cancel'),
-                style: AppTypography.headingSm
-                    .copyWith(color: AppColors.textSecondary)),
+            child: Text(
+              strings.t('cancel'),
+              style: AppTypography.headingSm
+                  .copyWith(color: AppColors.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text('Remove',
-                style:
-                    AppTypography.headingSm.copyWith(color: AppColors.error)),
+            child: Text(
+              'Remove',
+              style: AppTypography.headingSm
+                  .copyWith(color: AppColors.error),
+            ),
           ),
         ],
       ),
@@ -167,22 +243,111 @@ class DevicesTab extends StatelessWidget {
   }
 }
 
+// ── RPC refresh button ────────────────────────────────────────────────────────
+
+class _RpcRefreshButton extends StatefulWidget {
+  const _RpcRefreshButton({required this.mqtt, required this.strings});
+  final MqttService mqtt;
+  final AppStrings strings;
+
+  @override
+  State<_RpcRefreshButton> createState() => _RpcRefreshButtonState();
+}
+
+class _RpcRefreshButtonState extends State<_RpcRefreshButton> {
+  bool _loading = false;
+
+  Future<void> _refresh() async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    try {
+      final resp = await widget.mqtt.call(RpcMethod.tapoRefresh);
+      if (!resp.ok && mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(
+            content:
+                Text(resp.error ?? 'Refresh failed'),
+          ));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: _loading ? null : _refresh,
+      tooltip: widget.strings.t('devices_refresh'),
+      icon: _loading
+          ? SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.textTertiary,
+              ),
+            )
+          : const Icon(Icons.refresh_rounded, color: AppColors.textTertiary),
+    );
+  }
+}
+
+// ── Client mode banner ────────────────────────────────────────────────────────
+
+class _ClientModeBanner extends StatelessWidget {
+  const _ClientModeBanner({required this.strings});
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.infoSurface,
+        borderRadius: AppRadius.mdBR,
+        border: Border.all(color: AppColors.info.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.sync_rounded, size: 14, color: AppColors.info),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              'Device list synced from gateway. '
+              'Add or remove plugs on the gateway phone.',
+              style:
+                  AppTypography.labelSm.copyWith(color: AppColors.info),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Device card ───────────────────────────────────────────────────────────────
 
 class _DeviceCard extends StatelessWidget {
   const _DeviceCard({
     required this.device,
     required this.strings,
+    required this.isClientMode,
     required this.onToggle,
-    required this.onEdit,
-    required this.onDelete,
+    this.onEdit,
+    this.onDelete,
   });
 
   final TapoDevice device;
   final AppStrings strings;
+  final bool isClientMode;
   final ValueChanged<bool> onToggle;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -196,7 +361,7 @@ class _DeviceCard extends StatelessWidget {
         borderRadius: AppRadius.lgBR,
         border: Border.all(
           color: device.isOnline && device.isOn
-              ? AppColors.warning.withValues(alpha:0.4)
+              ? AppColors.warning.withValues(alpha: 0.4)
               : theme.colorScheme.outline,
           width: device.isOnline && device.isOn ? 1.5 : 1,
         ),
@@ -206,10 +371,9 @@ class _DeviceCard extends StatelessWidget {
           // ── Header ─────────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg, AppSpacing.md, AppSpacing.sm, 0),
+                AppSpacing.lg, AppSpacing.md, AppSpacing.sm, 0),
             child: Row(
               children: [
-                // Status dot
                 Container(
                   width: 8,
                   height: 8,
@@ -223,7 +387,8 @@ class _DeviceCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(device.name, style: AppTypography.headingSm),
+                      Text(device.name,
+                          style: AppTypography.headingSm),
                       Text(
                         device.isOnline
                             ? (device.model.isNotEmpty
@@ -235,20 +400,48 @@ class _DeviceCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                // Edit button
-                IconButton(
-                  onPressed: onEdit,
-                  icon: Icon(Icons.edit_outlined,
-                      size: 18,
-                      color: theme.colorScheme.onSurfaceVariant
-                          .withValues(alpha:0.6)),
-                ),
-                // Delete button
-                IconButton(
-                  onPressed: onDelete,
-                  icon: Icon(Icons.delete_outline_rounded,
-                      size: 18, color: AppColors.error.withValues(alpha:0.7)),
-                ),
+                // Edit / delete — hidden in client mode.
+                if (!isClientMode) ...[
+                  if (onEdit != null)
+                    IconButton(
+                      onPressed: onEdit,
+                      icon: Icon(Icons.edit_outlined,
+                          size: 18,
+                          color: theme.colorScheme.onSurfaceVariant
+                              .withValues(alpha: 0.6)),
+                    ),
+                  if (onDelete != null)
+                    IconButton(
+                      onPressed: onDelete,
+                      icon: Icon(Icons.delete_outline_rounded,
+                          size: 18,
+                          color:
+                              AppColors.error.withValues(alpha: 0.7)),
+                    ),
+                ] else
+                  // Client mode: show a REMOTE badge instead.
+                  Padding(
+                    padding: const EdgeInsets.only(right: AppSpacing.sm),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.infoSurface,
+                        borderRadius: AppRadius.xsBR,
+                        border: Border.all(
+                          color:
+                              AppColors.info.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Text(
+                        'REMOTE',
+                        style: AppTypography.labelSm.copyWith(
+                          color: AppColors.info,
+                          fontSize: 9,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -256,11 +449,15 @@ class _DeviceCard extends StatelessWidget {
           // ── Toggle row ──────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.md),
+              AppSpacing.lg,
+              AppSpacing.sm,
+              AppSpacing.lg,
+              AppSpacing.md,
+            ),
             child: Row(
               children: [
                 Expanded(
-                  child: ToggleCard(
+                  child: _ToggleCardLocal(
                     icon: Icons.power_rounded,
                     title: strings.t('plug_power'),
                     activeLabel: strings.t('active'),
@@ -279,6 +476,120 @@ class _DeviceCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A non-[Expanded] version of ToggleCard for use inside [Row] + [Expanded].
+///
+/// The standard [ToggleCard] wraps itself in [Expanded], which is correct
+/// when used directly in a [Row] without an outer [Expanded]. Here we have
+/// an outer [Expanded] already, so we inline the same visual without the
+/// extra [Expanded] wrapper.
+class _ToggleCardLocal extends StatelessWidget {
+  const _ToggleCardLocal({
+    required this.icon,
+    required this.title,
+    required this.activeLabel,
+    required this.disabledLabel,
+    required this.isActive,
+    required this.activeColor,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final IconData icon;
+  final String title;
+  final String activeLabel;
+  final String disabledLabel;
+  final bool isActive;
+  final Color activeColor;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(
+          vertical: AppSpacing.lg,
+          horizontal: AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: isActive
+              ? activeColor.withValues(alpha: 0.08)
+              : theme.colorScheme.surfaceContainerLow,
+          borderRadius: AppRadius.lgBR,
+          border: Border.all(
+            color:
+                isActive ? activeColor : theme.colorScheme.outline,
+            width: isActive ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: isActive
+                    ? activeColor.withValues(alpha: 0.15)
+                    : theme.colorScheme.surfaceContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                icon,
+                size: 20,
+                color: isActive
+                    ? activeColor
+                    : theme.colorScheme.onSurfaceVariant
+                        .withValues(alpha: 0.6),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: AppTypography.labelMd.copyWith(
+                color: isActive
+                    ? theme.colorScheme.onSurface
+                    : theme.colorScheme.onSurfaceVariant
+                        .withValues(alpha: 0.8),
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: isActive
+                    ? activeColor.withValues(alpha: 0.15)
+                    : theme.colorScheme.surfaceContainer,
+                borderRadius: AppRadius.xsBR,
+              ),
+              child: Text(
+                isActive ? activeLabel : disabledLabel,
+                style: AppTypography.labelSm.copyWith(
+                  color: isActive
+                      ? activeColor
+                      : theme.colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.6),
+                  fontSize: 9,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -310,7 +621,7 @@ class _InfoCard extends StatelessWidget {
                 width: 28,
                 height: 28,
                 decoration: BoxDecoration(
-                  color: AppColors.info.withValues(alpha:0.12),
+                  color: AppColors.info.withValues(alpha: 0.12),
                   borderRadius: AppRadius.smBR,
                 ),
                 child: const Icon(Icons.wifi_rounded,
@@ -446,7 +757,6 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Drag handle
               Center(
                 child: Container(
                   width: 40,
@@ -465,8 +775,6 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 style: AppTypography.headingLg,
               ),
               const SizedBox(height: AppSpacing.xl),
-
-              // Name
               TextField(
                 controller: _nameCtrl,
                 onChanged: (_) => setState(() {}),
@@ -478,8 +786,6 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
-
-              // IP
               TextField(
                 controller: _ipCtrl,
                 onChanged: (_) => setState(() {}),
@@ -492,8 +798,6 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
-
-              // Email
               TextField(
                 controller: _emailCtrl,
                 onChanged: (_) => setState(() {}),
@@ -505,8 +809,6 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
-
-              // Password
               TextField(
                 controller: _passwordCtrl,
                 onChanged: (_) => setState(() {}),
@@ -529,8 +831,6 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 ),
               ),
               const SizedBox(height: AppSpacing.lg),
-
-              // Test result banner
               if (_testResult != null) ...[
                 Container(
                   width: double.infinity,
@@ -542,8 +842,8 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                     borderRadius: AppRadius.mdBR,
                     border: Border.all(
                       color: _testSuccess
-                          ? AppColors.success.withValues(alpha:0.3)
-                          : AppColors.error.withValues(alpha:0.3),
+                          ? AppColors.success.withValues(alpha: 0.3)
+                          : AppColors.error.withValues(alpha: 0.3),
                     ),
                   ),
                   child: Row(
@@ -573,8 +873,6 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 ),
                 const SizedBox(height: AppSpacing.lg),
               ],
-
-              // Buttons
               Row(
                 children: [
                   Expanded(
@@ -628,9 +926,15 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 class _EmptyDevicesView extends StatelessWidget {
-  const _EmptyDevicesView({required this.strings, required this.onAdd});
+  const _EmptyDevicesView({
+    required this.strings,
+    required this.isClientMode,
+    this.onAdd,
+  });
+
   final AppStrings strings;
-  final VoidCallback onAdd;
+  final bool isClientMode;
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -643,23 +947,34 @@ class _EmptyDevicesView extends StatelessWidget {
             const Icon(Icons.power_outlined,
                 size: 48, color: AppColors.textTertiary),
             const SizedBox(height: AppSpacing.lg),
-            Text('No smart plugs yet',
-                style: AppTypography.headingMd),
+            Text(
+              isClientMode
+                  ? 'No plugs synced yet'
+                  : 'No smart plugs yet',
+              style: AppTypography.headingMd,
+            ),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              'Add a TP-Link Tapo plug to control it from here and use it in automations.',
+              isClientMode
+                  ? 'Plug state is synced from the gateway. '
+                      'Make sure the gateway phone has at least one Tapo device configured '
+                      'and is connected to the broker.'
+                  : 'Add a TP-Link Tapo plug to control it from here '
+                      'and use it in automations.',
               style: AppTypography.bodyMd,
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: AppSpacing.xxl),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: onAdd,
-                icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('Add Tapo device'),
+            if (!isClientMode && onAdd != null) ...[
+              const SizedBox(height: AppSpacing.xxl),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Add Tapo device'),
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),

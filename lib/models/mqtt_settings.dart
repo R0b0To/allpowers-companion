@@ -41,24 +41,39 @@ final class MqttSettings {
   final String clientId;
 
   /// True if enough info is present to attempt a connection.
-  bool get isConfigured => brokerHost.trim().isNotEmpty && topicPrefix.trim().isNotEmpty;
+  bool get isConfigured =>
+      brokerHost.trim().isNotEmpty && topicPrefix.trim().isNotEmpty;
 
   // ── Derived topic names ───────────────────────────────────────────────────
 
   /// The gateway publishes station telemetry here; clients subscribe.
   String get statusTopic => '$topicPrefix/status';
 
-  /// Root for outlet commands: clients publish to "$commandTopic/{usb|ac|dc}".
   String get commandTopic => '$topicPrefix/cmd';
-  
+
   /// The gateway subscribes to config updates here; clients publish.
   String get configTopic => '$topicPrefix/config';
 
+  /// Retained; both gateway and client publish/subscribe to keep flows in sync.
   String get flowsTopic => '$topicPrefix/flows';
 
-  String get rpcRequestTopic  => '$topicPrefix/rpc/request';
+  /// RPC request topic — client publishes, gateway subscribes.
+  String get rpcRequestTopic => '$topicPrefix/rpc/request';
+
+  /// RPC response topic — gateway publishes, client subscribes.
   String get rpcResponseTopic => '$topicPrefix/rpc/response';
+
+  /// Retained; gateway publishes full Tapo device list (with runtime state),
+  /// client subscribes to display and interact with plugs remotely.
   String get tapoDevicesTopic => '$topicPrefix/tapo/devices';
+
+  /// Single new history entry (not retained) — gateway publishes on each
+  /// automation action so clients get live events.
+  String get historyTopic => '$topicPrefix/history';
+
+  /// Full history snapshot (retained) — gateway publishes on connect so
+  /// freshly-connected clients receive the complete log immediately.
+  String get historySnapshotTopic => '$topicPrefix/history/snapshot';
 
   // ── Mutation ──────────────────────────────────────────────────────────────
 

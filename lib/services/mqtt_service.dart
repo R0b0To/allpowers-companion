@@ -1,16 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:async';
+
 import 'package:ap_companion/models/tapo_device.dart';
-
-import '../models/mqtt_rpc.dart';
-
 import 'package:flutter/foundation.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 import '../models/automation_history_entry.dart';
 import '../models/automation_flow.dart';
+import '../models/mqtt_rpc.dart';
 import '../models/mqtt_settings.dart';
 import '../models/power_station_status.dart';
 import '../utils/logger.dart';
@@ -22,6 +20,18 @@ import '../utils/logger.dart';
 /// so clients receive them in real time. On connect, the gateway also
 /// publishes a snapshot of recent history to `{prefix}/history/snapshot`
 /// (retained, QoS 1) so freshly-connected clients get the full picture.
+///
+/// ## Tapo device sync
+/// Gateway publishes the full device list (including runtime state) to
+/// `{prefix}/tapo/devices` (retained) whenever device state changes.
+/// Clients subscribe and call [onTapoDevicesReceived] to update their
+/// local [TapoDeviceService] via [TapoDeviceService.replaceAll].
+///
+/// ## RPC layer
+/// Client calls [call] to send a typed request to the gateway.
+/// Gateway receives it on [rpcRequestTopic], dispatches via [onRpcRequest],
+/// and publishes the response to [rpcResponseTopic].
+/// Client matches the response by correlation ID and completes the [Future].
 final class MqttService extends ChangeNotifier {
   MqttServerClient? _client;
   MqttSettings _settings = const MqttSettings();
@@ -30,22 +40,27 @@ final class MqttService extends ChangeNotifier {
   int _reconnectAttempts = 0;
   final Map<String, Completer<RpcResponse>> _rpcPending = {};
   static const _rpcTimeout = Duration(seconds: 10);
-
   static const int _maxBackoffSeconds = 60;
 
   // ── Public state ───────────────────────────────────────────────────────────
   PowerStationStatus _remoteStatus = const PowerStationStatus();
   bool _bleConnectedRemote = false;
   DateTime? _lastRemoteUpdate;
-
   bool _isConnected = false;
   bool _isConnecting = false;
   String? _lastError;
 
+  // ── Callbacks ──────────────────────────────────────────────────────────────
   void Function(String outlet, bool value)? onCommand;
   void Function(List<AutomationFlow> flows)? onFlowsReceived;
   void Function(List<AutomationHistoryEntry> entries)? onHistoryReceived;
+  void Function(List<TapoDevice> devices)? onTapoDevicesReceived;
 
+  /// Gateway-side RPC dispatcher. Returns the result map (or throws on failure).
+  Future<dynamic> Function(String method, Map<String, dynamic> params)?
+      onRpcRequest;
+
+  // ── Getters ────────────────────────────────────────────────────────────────
   PowerStationStatus get remoteStatus => _remoteStatus;
   bool get bleConnectedRemote => _bleConnectedRemote;
   DateTime? get lastRemoteUpdate => _lastRemoteUpdate;
@@ -79,45 +94,52 @@ final class MqttService extends ChangeNotifier {
     Log.i('MqttService', 'Flows published (${flows.length} flow(s))');
   }
 
+  /// Gateway: publishes the full Tapo device list with runtime state.
+  ///
+  /// Each entry includes the persisted fields from [TapoDevice.toJson] plus
+  /// runtime-only [isOnline], [isOn], and [model] so clients can display
+  /// live state without polling the plugs themselves.
   void publishTapoDevices(List<TapoDevice> devices) {
-  if (!_isConnected || _settings.mode != AppMode.gateway) return;
-  _publish(
-    _settings.tapoDevicesTopic,
-    jsonEncode(devices.map((d) => d.toJson()
-      // Include runtime state for the client display
-      ..addAll({'isOnline': d.isOnline, 'isOn': d.isOn, 'model': d.model})
-    ).toList()),
-    retain: true,
-  );
-}
-
-void Function(List<TapoDevice> devices)? onTapoDevicesReceived;
+    if (!_isConnected || _settings.mode != AppMode.gateway) return;
+    final payload = devices.map((d) {
+      // Build a complete map: persisted config + runtime state.
+      return {
+        ...d.toJson(),
+        'isOnline': d.isOnline,
+        'isOn': d.isOn,
+        'model': d.model,
+      };
+    }).toList();
+    _publish(
+      _settings.tapoDevicesTopic,
+      jsonEncode(payload),
+      retain: true,
+    );
+    Log.i('MqttService',
+        'Tapo devices published (${devices.length} device(s))');
+  }
 
   /// Gateway: publishes a single new history entry (not retained — live events).
   void publishHistoryEntry(AutomationHistoryEntry entry) {
     if (!_isConnected || _settings.mode != AppMode.gateway) return;
     _publish(
-      '${_settings.topicPrefix}/history',
+      _settings.historyTopic,
       jsonEncode(entry.toJson()),
       retain: false,
     );
   }
-
-// Gateway-side: called when an RPC request arrives.
-  // Returns the result map (or throws on failure).
-  Future<dynamic> Function(String method, Map<String, dynamic> params)?
-      onRpcRequest;
 
   /// Gateway: publishes a full history snapshot (retained so clients get it on connect).
   void publishHistorySnapshot(List<AutomationHistoryEntry> entries) {
     if (!_isConnected || _settings.mode != AppMode.gateway) return;
     final payload = jsonEncode(entries.map((e) => e.toJson()).toList());
     _publish(
-      '${_settings.topicPrefix}/history/snapshot',
+      _settings.historySnapshotTopic,
       payload,
       retain: true,
     );
-    Log.i('MqttService', 'History snapshot published (${entries.length} entries)');
+    Log.i('MqttService',
+        'History snapshot published (${entries.length} entries)');
   }
 
   // ── Connect ───────────────────────────────────────────────────────────────
@@ -252,17 +274,19 @@ void Function(List<TapoDevice> devices)? onTapoDevicesReceived;
       case AppMode.gateway:
         c.subscribe('${_settings.commandTopic}/+', MqttQos.atLeastOnce);
         c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
-        c.subscribe(_settings.rpcRequestTopic,     MqttQos.atLeastOnce);
-        Log.i('MqttService', 'Gateway subscribed to commands + flows + rpc/request');
+        c.subscribe(_settings.rpcRequestTopic, MqttQos.atLeastOnce);
+        Log.i('MqttService',
+            'Gateway subscribed to commands + flows + rpc/request');
 
       case AppMode.client:
-  c.subscribe(_settings.statusTopic,         MqttQos.atLeastOnce);
-  c.subscribe(_settings.flowsTopic,          MqttQos.atLeastOnce);
-  c.subscribe('${_settings.topicPrefix}/history',          MqttQos.atLeastOnce);
-  c.subscribe('${_settings.topicPrefix}/history/snapshot', MqttQos.atLeastOnce);
-  c.subscribe(_settings.rpcResponseTopic,    MqttQos.atLeastOnce);
-  c.subscribe(_settings.tapoDevicesTopic, MqttQos.atLeastOnce); 
-  Log.i('MqttService', 'Client subscribed to status + flows + history + rpc/response');
+        c.subscribe(_settings.statusTopic, MqttQos.atLeastOnce);
+        c.subscribe(_settings.flowsTopic, MqttQos.atLeastOnce);
+        c.subscribe(_settings.historyTopic, MqttQos.atLeastOnce);
+        c.subscribe(_settings.historySnapshotTopic, MqttQos.atLeastOnce);
+        c.subscribe(_settings.rpcResponseTopic, MqttQos.atLeastOnce);
+        c.subscribe(_settings.tapoDevicesTopic, MqttQos.atLeastOnce);
+        Log.i('MqttService',
+            'Client subscribed to status + flows + history + rpc/response + tapo/devices');
 
       case AppMode.standalone:
         break;
@@ -279,36 +303,38 @@ void Function(List<TapoDevice> devices)? onTapoDevicesReceived;
       final raw =
           MqttPublishPayload.bytesToStringAsString(pub.payload.message);
       try {
+        // ── Shared topics (order matters — most specific first) ─────────────
         if (event.topic == _settings.flowsTopic) {
           _handleFlowsSync(raw);
           continue;
         }
-if (event.topic == _settings.tapoDevicesTopic) {
-  _handleTapoDevices(raw);
-  continue;
-}
-        // Add before the existing topic checks:
-if (event.topic == _settings.rpcRequestTopic) {
-  _handleRpcRequest(raw);
-  continue;
-}
-if (event.topic == _settings.rpcResponseTopic) {
-  _handleRpcResponse(raw);
-  continue;
-}
 
-        // History: single entry
-        if (event.topic == '${_settings.topicPrefix}/history') {
+        if (event.topic == _settings.tapoDevicesTopic) {
+          _handleTapoDevices(raw);
+          continue;
+        }
+
+        if (event.topic == _settings.rpcRequestTopic) {
+          unawaited(_handleRpcRequest(raw));
+          continue;
+        }
+
+        if (event.topic == _settings.rpcResponseTopic) {
+          _handleRpcResponse(raw);
+          continue;
+        }
+
+        if (event.topic == _settings.historyTopic) {
           _handleHistoryEntry(raw);
           continue;
         }
 
-        // History: full snapshot
-        if (event.topic == '${_settings.topicPrefix}/history/snapshot') {
+        if (event.topic == _settings.historySnapshotTopic) {
           _handleHistorySnapshot(raw);
           continue;
         }
 
+        // ── Mode-specific topics ────────────────────────────────────────────
         if (_settings.mode == AppMode.client &&
             event.topic == _settings.statusTopic) {
           _handleStatus(raw);
@@ -316,19 +342,20 @@ if (event.topic == _settings.rpcResponseTopic) {
             event.topic.startsWith(_settings.commandTopic)) {
           _handleCommand(event.topic, raw);
         }
-
-        
       } catch (e) {
         Log.e('MqttService', 'Parse error [${event.topic}]', e);
       }
     }
   }
 
+  // ── Message handlers ──────────────────────────────────────────────────────
+
   void _handleFlowsSync(String raw) {
     try {
       final list = jsonDecode(raw) as List<dynamic>;
       final flows = list
-          .map((j) => AutomationFlow.tryFromJson(j as Map<String, dynamic>))
+          .map((j) =>
+              AutomationFlow.tryFromJson(j as Map<String, dynamic>))
           .whereType<AutomationFlow>()
           .toList();
       Log.i('MqttService', 'Flows received (${flows.length} flow(s))');
@@ -342,9 +369,7 @@ if (event.topic == _settings.rpcResponseTopic) {
     try {
       final entry = AutomationHistoryEntry.tryFromJson(
           jsonDecode(raw) as Map<String, dynamic>);
-      if (entry != null) {
-        onHistoryReceived?.call([entry]);
-      }
+      if (entry != null) onHistoryReceived?.call([entry]);
     } catch (e) {
       Log.e('MqttService', 'Failed to parse history entry', e);
     }
@@ -358,7 +383,8 @@ if (event.topic == _settings.rpcResponseTopic) {
               j as Map<String, dynamic>))
           .whereType<AutomationHistoryEntry>()
           .toList();
-      Log.i('MqttService', 'History snapshot received (${entries.length} entries)');
+      Log.i('MqttService',
+          'History snapshot received (${entries.length} entries)');
       if (entries.isNotEmpty) onHistoryReceived?.call(entries);
     } catch (e) {
       Log.e('MqttService', 'Failed to parse history snapshot', e);
@@ -386,34 +412,36 @@ if (event.topic == _settings.rpcResponseTopic) {
   }
 
   void _handleTapoDevices(String raw) {
-  try {
-    final list = jsonDecode(raw) as List<dynamic>;
-    final devices = list
-        .map((j) => _tapoDeviceFromJson(j as Map<String, dynamic>))
-        .whereType<TapoDevice>()
-        .toList();
-    onTapoDevicesReceived?.call(devices);
-  } catch (e) {
-    Log.e('MqttService', 'Failed to parse tapo/devices', e);
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      final devices = list
+          .map((j) => _tapoDeviceFromJson(j as Map<String, dynamic>))
+          .whereType<TapoDevice>()
+          .toList();
+      Log.i('MqttService',
+          'Tapo devices received (${devices.length} device(s))');
+      onTapoDevicesReceived?.call(devices);
+    } catch (e) {
+      Log.e('MqttService', 'Failed to parse tapo/devices', e);
+    }
   }
-}
 
-static TapoDevice? _tapoDeviceFromJson(Map<String, dynamic> j) {
-  try {
-    return TapoDevice(
-      id:       j['id']       as String,
-      name:     j['name']     as String,
-      ip:       j['ip']       as String,
-      email:    j['email']    as String,
-      password: j['password'] as String,
-      isOnline: j['isOnline'] as bool?   ?? false,
-      isOn:     j['isOn']     as bool?   ?? false,
-      model:    j['model']    as String? ?? '',
-    );
-  } catch (_) {
-    return null;
+  static TapoDevice? _tapoDeviceFromJson(Map<String, dynamic> j) {
+    try {
+      return TapoDevice(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        ip: j['ip'] as String,
+        email: j['email'] as String,
+        password: j['password'] as String,
+        isOnline: j['isOnline'] as bool? ?? false,
+        isOn: j['isOn'] as bool? ?? false,
+        model: j['model'] as String? ?? '',
+      );
+    } catch (_) {
+      return null;
+    }
   }
-}
 
   void _handleCommand(String topic, String raw) {
     final outlet = topic.split('/').last;
@@ -464,104 +492,118 @@ static TapoDevice? _tapoDeviceFromJson(Map<String, dynamic> j) {
         retain: retain);
   }
 
+  // ── RPC ───────────────────────────────────────────────────────────────────
+
   Future<void> _handleRpcRequest(String raw) async {
-  RpcRequest req;
-  try {
-    final j = jsonDecode(raw) as Map<String, dynamic>;
-    req = RpcRequest(
-      id:     j['id']     as String,
-      method: j['method'] as String,
-      params: (j['params'] as Map<String, dynamic>?) ?? {},
-    );
-  } catch (e) {
-    Log.e('MqttService', 'Malformed RPC request: $raw', e);
-    return;
-  }
-
-  dynamic result;
-  String? error;
-
-  try {
-    final handler = onRpcRequest;
-    if (handler == null) throw StateError('No RPC handler registered');
-    result = await handler(req.method, req.params);
-  } catch (e) {
-    error = e.toString();
-    Log.e('MqttService', 'RPC "${req.method}" failed', e);
-  }
-
-  _publish(
-    _settings.rpcResponseTopic,
-    jsonEncode({
-      'id':     req.id,
-      'ok':     error == null,
-      'result': result,
-      'error':  error,
-    }),
-    retain: false,
-  );
-}
-
-void _handleRpcResponse(String raw) {
-  try {
-    final j    = jsonDecode(raw) as Map<String, dynamic>;
-    final resp = RpcResponse.tryFromJson(j);
-    if (resp == null) return;
-
-    final completer = _rpcPending.remove(resp.id);
-    if (completer == null) {
-      Log.w('MqttService', 'RPC response for unknown id: ${resp.id}');
+    RpcRequest req;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      req = RpcRequest(
+        id: j['id'] as String,
+        method: j['method'] as String,
+        params: (j['params'] as Map<String, dynamic>?) ?? {},
+      );
+    } catch (e) {
+      Log.e('MqttService', 'Malformed RPC request: $raw', e);
       return;
     }
-    if (completer.isCompleted) return;
-    completer.complete(resp);
-  } catch (e) {
-    Log.e('MqttService', 'Failed to parse RPC response', e);
+
+    dynamic result;
+    String? error;
+
+    try {
+      final handler = onRpcRequest;
+      if (handler == null) throw StateError('No RPC handler registered');
+      result = await handler(req.method, req.params);
+    } catch (e) {
+      error = e.toString();
+      Log.e('MqttService', 'RPC "${req.method}" failed', e);
+    }
+
+    _publish(
+      _settings.rpcResponseTopic,
+      jsonEncode({
+        'id': req.id,
+        'ok': error == null,
+        'result': result,
+        'error': error,
+      }),
+      retain: false,
+    );
   }
-}
 
-/// Sends an RPC request and awaits the gateway's response.
-///
-/// Returns the [RpcResponse]. Throws [TimeoutException] if the gateway
-/// does not respond within [_rpcTimeout]. Never throws on gateway-side
-/// errors — check [RpcResponse.ok] and [RpcResponse.error] instead.
-Future<RpcResponse> call(String method, [Map<String, dynamic> params = const {}]) async {
-  if (!_isConnected) {
-    return RpcResponse(id: '', ok: false, error: 'Not connected');
-  }
+  void _handleRpcResponse(String raw) {
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      final resp = RpcResponse.tryFromJson(j);
+      if (resp == null) return;
 
-  final id  = 'rpc_${DateTime.now().microsecondsSinceEpoch}';
-  final req = RpcRequest(id: id, method: method, params: params);
-
-  final completer = Completer<RpcResponse>();
-  _rpcPending[id] = completer;
-
-  _publish(_settings.rpcRequestTopic, req.toJsonString(), retain: false);
-  Log.d('MqttService', 'RPC call → ${req.method} [$id]');
-
-  try {
-    return await completer.future.timeout(_rpcTimeout);
-  } on TimeoutException {
-    _rpcPending.remove(id);
-    Log.w('MqttService', 'RPC timeout: ${req.method} [$id]');
-    return RpcResponse(id: id, ok: false, error: 'Gateway did not respond within ${_rpcTimeout.inSeconds}s');
-  }
-}
-
-/// Cancel all pending RPC calls (call on disconnect/dispose).
-void _cancelPendingRpc([String reason = 'Disconnected']) {
-  for (final entry in _rpcPending.entries) {
-    if (!entry.value.isCompleted) {
-      entry.value.complete(RpcResponse(id: entry.key, ok: false, error: reason));
+      final completer = _rpcPending.remove(resp.id);
+      if (completer == null) {
+        Log.w('MqttService', 'RPC response for unknown id: ${resp.id}');
+        return;
+      }
+      if (completer.isCompleted) return;
+      completer.complete(resp);
+    } catch (e) {
+      Log.e('MqttService', 'Failed to parse RPC response', e);
     }
   }
-  _rpcPending.clear();
-}
+
+  /// Sends an RPC request to the gateway and awaits its response.
+  ///
+  /// Returns the [RpcResponse]. Never throws — check [RpcResponse.ok] and
+  /// [RpcResponse.error] to determine success. Resolves with an error
+  /// response on timeout or if not connected.
+  Future<RpcResponse> call(
+    String method, [
+    Map<String, dynamic> params = const {},
+  ]) async {
+    if (!_isConnected) {
+      return RpcResponse(id: '', ok: false, error: 'Not connected');
+    }
+
+    final id = 'rpc_${DateTime.now().microsecondsSinceEpoch}';
+    final req = RpcRequest(id: id, method: method, params: params);
+
+    final completer = Completer<RpcResponse>();
+    _rpcPending[id] = completer;
+
+    _publish(_settings.rpcRequestTopic, req.toJsonString(), retain: false);
+    Log.d('MqttService', 'RPC call → ${req.method} [$id]');
+
+    try {
+      return await completer.future.timeout(_rpcTimeout);
+    } on TimeoutException {
+      _rpcPending.remove(id);
+      Log.w('MqttService', 'RPC timeout: ${req.method} [$id]');
+      return RpcResponse(
+        id: id,
+        ok: false,
+        error:
+            'Gateway did not respond within ${_rpcTimeout.inSeconds}s',
+      );
+    }
+  }
+
+  /// Cancels all pending RPC calls (call on disconnect/dispose).
+  void _cancelPendingRpc([String reason = 'Disconnected']) {
+    for (final entry in _rpcPending.entries) {
+      if (!entry.value.isCompleted) {
+        entry.value.complete(
+            RpcResponse(id: entry.key, ok: false, error: reason));
+      }
+    }
+    _rpcPending.clear();
+  }
+
+  // ── Test connection ───────────────────────────────────────────────────────
 
   Future<String> testConnection(MqttSettings s) async {
     final testId =
         'ap_test_${DateTime.now().millisecondsSinceEpoch % 1000000}';
-    final c = MqttServerClient.withPort(s.brokerHost.trim(), testId, s.port);
+    final c =
+        MqttServerClient.withPort(s.brokerHost.trim(), testId, s.port);
     c.secure = s.useTls;
     c.keepAlivePeriod = 10;
     c.onFailedConnectionAttempt = (_) {};
@@ -578,15 +620,16 @@ void _cancelPendingRpc([String reason = 'Disconnected']) {
       final status =
           await c.connect().timeout(const Duration(seconds: 10));
 
-      final isSuccess = status?.state == MqttConnectionState.connected ||
-          status?.returnCode == MqttConnectReturnCode.connectionAccepted;
+      final isSuccess =
+          status?.state == MqttConnectionState.connected ||
+              status?.returnCode ==
+                  MqttConnectReturnCode.connectionAccepted;
 
       c.disconnect();
 
       if (isSuccess) {
         return 'Connected to ${s.brokerHost}:${s.port} ✓';
       }
-
       return 'Connection failed — broker returned: '
           '${status?.returnCode?.name ?? 'no response'}';
     } catch (e) {
@@ -595,11 +638,14 @@ void _cancelPendingRpc([String reason = 'Disconnected']) {
     }
   }
 
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
   String _effectiveClientId() {
     final baseId = _settings.clientId.trim().isNotEmpty
         ? _settings.clientId.trim()
         : 'ap';
-    final tag = _settings.mode == AppMode.gateway ? 'gw' : 'cl';
+    final tag =
+        _settings.mode == AppMode.gateway ? 'gw' : 'cl';
     return '${baseId}_${tag}_${DateTime.now().microsecondsSinceEpoch}';
   }
 
@@ -609,12 +655,14 @@ void _cancelPendingRpc([String reason = 'Disconnected']) {
         s.contains('Connection Acknowledgement') ||
         s.contains('no response')) {
       return 'Broker did not respond.\n'
-          'Check: host is correct, port 8883 requires TLS ON, port 1883 requires TLS OFF.';
+          'Check: host is correct, port 8883 requires TLS ON, '
+          'port 1883 requires TLS OFF.';
     }
     if (s.contains('SocketException') ||
         s.contains('refused') ||
         s.contains('lookup')) {
-      return 'Cannot reach broker — check the host name and your internet connection.';
+      return 'Cannot reach broker — check the host name and your '
+          'internet connection.';
     }
     if (s.contains('UNAUTHORIZED') ||
         s.contains('BAD_CREDENTIALS') ||
@@ -635,9 +683,12 @@ void _cancelPendingRpc([String reason = 'Disconnected']) {
     _reconnectTimer?.cancel();
     _msgSub?.cancel();
     _client?.disconnect();
+    _cancelPendingRpc('Disposed');
     onCommand = null;
     onFlowsReceived = null;
     onHistoryReceived = null;
+    onTapoDevicesReceived = null;
+    onRpcRequest = null;
     super.dispose();
   }
 }

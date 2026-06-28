@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:ap_companion/models/mqtt_rpc_methods.dart';
 import 'package:ap_companion/models/power_station_status.dart';
+import 'package:ap_companion/models/tapo_device.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -38,21 +40,19 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   // ── Repository layer ───────────────────────────────────────────────────────
-  /// Single composition root. Each service receives only its specific
-  /// repository interface, keeping all services independently unit-testable.
   final _repos = AppRepositories();
 
   // ── Services ───────────────────────────────────────────────────────────────
   final _notifications = NotificationService();
-  final _webhooks      = WebhookService();
-  final _tapo          = TapoService();
-  final _mqtt          = MqttService();
+  final _webhooks = WebhookService();
+  final _tapo = TapoService();
+  final _mqtt = MqttService();
 
-  late final HistoryService     _history;
-  late final EnergyLogService   _energyLog;
-  late final BleService         _ble;
-  late final TapoDeviceService  _tapoDevices;
-  late final FlowEngine         _flowEngine;
+  late final HistoryService _history;
+  late final EnergyLogService _energyLog;
+  late final BleService _ble;
+  late final TapoDeviceService _tapoDevices;
+  late final FlowEngine _flowEngine;
 
   // ── MQTT publish throttling ────────────────────────────────────────────────
   DateTime? _lastMqttPublishTime;
@@ -64,12 +64,12 @@ class _MainShellState extends State<MainShell> {
   int _lastKnownHistoryCount = 0;
 
   // ── State ──────────────────────────────────────────────────────────────────
-  AutomationSettings _settings    = const AutomationSettings();
-  MqttSettings       _mqttSettings = const MqttSettings();
-  List<AutomationFlow> _flows     = [];
+  AutomationSettings _settings = const AutomationSettings();
+  MqttSettings _mqttSettings = const MqttSettings();
+  List<AutomationFlow> _flows = [];
   bool _permissionsPermanentlyDenied = false;
-  int  _selectedIndex = 0;
-  bool _bootstrapped  = false;
+  int _selectedIndex = 0;
+  bool _bootstrapped = false;
   bool _applyingRemoteFlows = false;
 
   @override
@@ -77,12 +77,11 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     AppTheme.applySystemOverlay();
 
-    // Each service receives only the repository interface it needs.
-    _history     = HistoryService(_repos.history);
-    _energyLog   = EnergyLogService(_repos.energyLog);
-    _ble         = BleService(_repos.ble);
+    _history = HistoryService(_repos.history);
+    _energyLog = EnergyLogService(_repos.energyLog);
+    _ble = BleService(_repos.ble);
     _tapoDevices = TapoDeviceService(_tapo, _repos.tapo);
-    _flowEngine  = FlowEngine(
+    _flowEngine = FlowEngine(
       _ble, _webhooks, _tapo, _tapoDevices, _history, _repos.flows,
     );
 
@@ -98,8 +97,6 @@ class _MainShellState extends State<MainShell> {
     await _requestPermissions();
     if (!mounted) return;
 
-    // All three repository reads run in parallel — they share the same
-    // SharedPreferencesSource so only one native getInstance() call is made.
     final results = await Future.wait([
       _repos.automationSettings.load(),
       _repos.mqttSettings.load(),
@@ -109,12 +106,12 @@ class _MainShellState extends State<MainShell> {
 
     final autoSettings = results[0] as AutomationSettings;
     final mqttSettings = results[1] as MqttSettings;
-    final flows        = results[2] as List<AutomationFlow>;
+    final flows = results[2] as List<AutomationFlow>;
 
     setState(() {
-      _settings     = autoSettings;
+      _settings = autoSettings;
       _mqttSettings = mqttSettings;
-      _flows        = flows;
+      _flows = flows;
       _bootstrapped = true;
     });
 
@@ -137,14 +134,13 @@ class _MainShellState extends State<MainShell> {
 
     _tapoDevices.addListener(_onTapoDevicesChanged);
 
-    _mqtt.onCommand         = _onMqttCommand;
-    _mqtt.onFlowsReceived   = _onMqttFlowsReceived;
+    // ── Wire up MQTT callbacks ──────────────────────────────────────────────
+    _mqtt.onCommand = _onMqttCommand;
+    _mqtt.onFlowsReceived = _onMqttFlowsReceived;
     _mqtt.onHistoryReceived = _onMqttHistoryReceived;
     _mqtt.onRpcRequest = _onRpcRequest;
-    _mqtt.onTapoDevicesReceived = (devices) {
-  if (!mounted || _mqttSettings.mode != AppMode.client) return;
-  _tapoDevices.replaceAll(devices);  // see below
-};
+    _mqtt.onTapoDevicesReceived = _onMqttTapoDevicesReceived;
+
     await _mqtt.configure(mqttSettings);
     if (!mounted) return;
 
@@ -154,23 +150,24 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  
-
   // ── BLE callbacks ──────────────────────────────────────────────────────────
 
   void _onBleStatus(PowerStationStatus status) {
     _notifications.handleBatteryLevel(status.batteryLevel);
+
+    // Only run flow engine on the gateway/standalone — not on the client.
     if (_mqttSettings.mode != AppMode.client) {
       _flowEngine.evaluate(_flows, _settings);
     }
+
     _energyLog.recordSample(status);
     ForegroundService.updateStatus(connected: true, status: status);
 
     if (_mqttSettings.mode == AppMode.gateway) {
       final now = DateTime.now();
       final stateChanged = _lastAcState == null ||
-          status.isAcOn  != _lastAcState ||
-          status.isDcOn  != _lastDcState ||
+          status.isAcOn != _lastAcState ||
+          status.isDcOn != _lastDcState ||
           status.isUsbOn != _lastUsbState;
 
       if (stateChanged ||
@@ -178,8 +175,8 @@ class _MainShellState extends State<MainShell> {
           now.difference(_lastMqttPublishTime!).inSeconds >= 5) {
         _mqtt.publishStatus(status, bleConnected: true);
         _lastMqttPublishTime = now;
-        _lastAcState  = status.isAcOn;
-        _lastDcState  = status.isDcOn;
+        _lastAcState = status.isAcOn;
+        _lastDcState = status.isDcOn;
         _lastUsbState = status.isUsbOn;
       }
     }
@@ -188,7 +185,7 @@ class _MainShellState extends State<MainShell> {
   void _onBleStateChanged() {
     ForegroundService.updateStatus(
       connected: _ble.isConnected,
-      status:    _ble.isConnected ? _ble.status : null,
+      status: _ble.isConnected ? _ble.status : null,
     );
     if (!_ble.isConnected && _mqttSettings.mode == AppMode.gateway) {
       _mqtt.publishStatus(_ble.status, bleConnected: false);
@@ -210,100 +207,129 @@ class _MainShellState extends State<MainShell> {
   // ── Tapo polling callback ──────────────────────────────────────────────────
 
   void _onTapoDevicesChanged() {
-  if (_mqttSettings.mode != AppMode.client) {
-    _flowEngine.evaluateTapoTriggers(_flows, _settings);
+    // Only run Tapo triggers locally on gateway/standalone.
+    if (_mqttSettings.mode != AppMode.client) {
+      _flowEngine.evaluateTapoTriggers(_flows, _settings);
+    }
+    // Publish updated device list to clients whenever state changes.
+    if (_mqttSettings.mode == AppMode.gateway) {
+      _publishTapoDevices();
+    }
   }
-  if (_mqttSettings.mode == AppMode.gateway) {
-    _publishTapoDevices();                    // NEW: keep clients in sync
-  }
-}
 
   // ── MQTT callbacks ─────────────────────────────────────────────────────────
 
   void _onMqttCommand(String outlet, bool value) {
+    // Legacy ad-hoc command path — kept for compatibility.
+    // The RPC path via [_onRpcRequest] / [RpcMethod.setOutlet] is preferred.
     if (_mqttSettings.mode != AppMode.gateway) return;
     if (!_ble.isConnected) return;
     switch (outlet) {
-      case 'usb': _ble.setUsb(value);
-      case 'ac':  _ble.setAc(value);
-      case 'dc':  _ble.setDc(value);
+      case 'usb':
+        _ble.setUsb(value);
+      case 'ac':
+        _ble.setAc(value);
+      case 'dc':
+        _ble.setDc(value);
     }
   }
 
-  Future<dynamic> _onRpcRequest(
-  String method,
-  Map<String, dynamic> params,
-) async {
-  switch (method) {
-    // ── Outlet control ──────────────────────────────────────────────────
-    case RpcMethod.setOutlet:
-      final outlet = params['outlet'] as String;
-      final value  = params['value']  as bool;
-      _onMqttCommand(outlet, value);       // reuse existing handler
-      return {'outlet': outlet, 'value': value};
-
-    // ── Tapo control ────────────────────────────────────────────────────
-    case RpcMethod.tapoSetOn:
-      final deviceId = params['deviceId'] as String;
-      final on       = params['on']       as bool;
-      final ok = await _tapoDevices.setDeviceOn(deviceId, on);
-      // Publish updated device list so clients see the new state immediately.
-      _publishTapoDevices();
-      return {'ok': ok};
-
-    case RpcMethod.tapoRefresh:
-      await _tapoDevices.refresh();
-      _publishTapoDevices();
-      return {'count': _tapoDevices.devices.length};
-
-    // ── Flow management ─────────────────────────────────────────────────
-    case RpcMethod.flowsReplace:
-      final raw   = params['flows'] as List<dynamic>;
-      final flows = raw
-          .map((j) => AutomationFlow.tryFromJson(j as Map<String, dynamic>))
-          .whereType<AutomationFlow>()
-          .toList();
-      await _onFlowsChanged(flows);
-      return {'count': flows.length};
-
-    case RpcMethod.flowSetEnabled:
-      final flowId  = params['flowId']  as String;
-      final enabled = params['enabled'] as bool;
-      final updated = _flows
-          .map((f) => f.id == flowId ? f.copyWith(enabled: enabled) : f)
-          .toList();
-      await _onFlowsChanged(updated);
-      return {'ok': true};
-
-    case RpcMethod.flowDelete:
-      final flowId  = params['flowId'] as String;
-      final updated = _flows.where((f) => f.id != flowId).toList();
-      await _onFlowsChanged(updated);
-      return {'ok': true};
-
-    case RpcMethod.flowRun:
-      // Manual one-shot trigger: temporarily force the flow to fire
-      // by resetting its triggered guard, then calling evaluate once.
-      final flowId = params['flowId'] as String;
-      final flow   = _flows.firstWhere((f) => f.id == flowId);
-      _flowEngine.resetTriggeredForFlow(flowId);
-      await _flowEngine.evaluateOnce(flow, _settings);
-      return {'ok': true};
-
-    // ── History ─────────────────────────────────────────────────────────
-    case RpcMethod.historyClear:
-      await _history.clear();
-      return {'ok': true};
-
-    default:
-      throw ArgumentError('Unknown RPC method: $method');
+  /// Client: receives Tapo device list published by the gateway.
+  void _onMqttTapoDevicesReceived(List<TapoDevice> devices) {
+    if (!mounted || _mqttSettings.mode != AppMode.client) return;
+    _tapoDevices.replaceAll(devices);
   }
-}
 
-void _publishTapoDevices() {
-  if (!_mqtt.isConnected) return;
-  _mqtt.publishTapoDevices(_tapoDevices.devices);
-}
+  // ── RPC request handler (gateway-side) ────────────────────────────────────
+
+  Future<dynamic> _onRpcRequest(
+    String method,
+    Map<String, dynamic> params,
+  ) async {
+    switch (method) {
+      // ── Outlet control ──────────────────────────────────────────────────
+      case RpcMethod.setOutlet:
+        final outlet = params['outlet'] as String;
+        final value = params['value'] as bool;
+        if (_ble.isConnected) {
+          switch (outlet) {
+            case 'usb':
+              await _ble.setUsb(value);
+            case 'ac':
+              await _ble.setAc(value);
+            case 'dc':
+              await _ble.setDc(value);
+          }
+        }
+        return {'outlet': outlet, 'value': value};
+
+      // ── Tapo control ────────────────────────────────────────────────────
+      case RpcMethod.tapoSetOn:
+        final deviceId = params['deviceId'] as String;
+        final on = params['on'] as bool;
+        final ok = await _tapoDevices.setDeviceOn(deviceId, on);
+        // Push updated state to all clients immediately.
+        _publishTapoDevices();
+        return {'ok': ok};
+
+      case RpcMethod.tapoRefresh:
+        await _tapoDevices.refresh();
+        _publishTapoDevices();
+        return {'count': _tapoDevices.devices.length};
+
+      // ── Flow management ─────────────────────────────────────────────────
+      case RpcMethod.flowsReplace:
+        final raw = params['flows'] as List<dynamic>;
+        final flows = raw
+            .map((j) =>
+                AutomationFlow.tryFromJson(j as Map<String, dynamic>))
+            .whereType<AutomationFlow>()
+            .toList();
+        await _onFlowsChanged(flows);
+        return {'count': flows.length};
+
+      case RpcMethod.flowSetEnabled:
+        final flowId = params['flowId'] as String;
+        final enabled = params['enabled'] as bool;
+        final updated = _flows
+            .map((f) => f.id == flowId ? f.copyWith(enabled: enabled) : f)
+            .toList();
+        await _onFlowsChanged(updated);
+        return {'ok': true};
+
+      case RpcMethod.flowDelete:
+        final flowId = params['flowId'] as String;
+        final updated = _flows.where((f) => f.id != flowId).toList();
+        await _onFlowsChanged(updated);
+        return {'ok': true};
+
+      case RpcMethod.flowRun:
+        final flowId = params['flowId'] as String;
+        final flow = _flows.firstWhere((f) => f.id == flowId);
+        _flowEngine.resetTriggeredForFlow(flowId);
+        await _flowEngine.evaluateOnce(flow, _settings);
+        return {'ok': true};
+
+      // ── History ─────────────────────────────────────────────────────────
+      case RpcMethod.historyClear:
+        await _history.clear();
+        return {'ok': true};
+
+      default:
+        throw ArgumentError('Unknown RPC method: $method');
+    }
+  }
+
+  // ── Publish helpers ────────────────────────────────────────────────────────
+
+  void _publishTapoDevices() {
+    if (!_mqtt.isConnected) return;
+    if (_mqttSettings.mode != AppMode.gateway) return;
+    _mqtt.publishTapoDevices(_tapoDevices.devices);
+  }
+
+  // ── MQTT flow/history received ─────────────────────────────────────────────
+
   Future<void> _onMqttFlowsReceived(List<AutomationFlow> flows) async {
     if (!mounted || _applyingRemoteFlows) return;
     _applyingRemoteFlows = true;
@@ -334,7 +360,7 @@ void _publishTapoDevices() {
 
   Future<void> _onMqttSettingsChanged(MqttSettings updated) async {
     final wasClient = _mqttSettings.mode == AppMode.client;
-    final nowClient = updated.mode    == AppMode.client;
+    final nowClient = updated.mode == AppMode.client;
 
     setState(() {
       _mqttSettings = updated;
@@ -348,6 +374,8 @@ void _publishTapoDevices() {
     if (!wasClient && nowClient) {
       await ForegroundService.stop();
     } else if (wasClient && !nowClient) {
+      // Leaving client mode: switch TapoDeviceService back to local polling.
+      _tapoDevices.resumeLocalPolling();
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
     }
@@ -355,7 +383,8 @@ void _publishTapoDevices() {
 
   Future<void> _onFlowsChanged(List<AutomationFlow> updated) async {
     await _applyFlows(updated);
-    if (!_applyingRemoteFlows && _mqttSettings.mode != AppMode.standalone) {
+    if (!_applyingRemoteFlows &&
+        _mqttSettings.mode != AppMode.standalone) {
       _mqtt.publishFlows(updated);
     }
   }
@@ -401,7 +430,7 @@ void _publishTapoDevices() {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  int _tabCount(bool isClientMode) => isClientMode ? 3 : 5;
+  int _tabCount(bool isClientMode) => isClientMode ? 4 : 5;
 
   // ── Dispose ────────────────────────────────────────────────────────────────
 
@@ -411,10 +440,12 @@ void _publishTapoDevices() {
     _tapoDevices.removeListener(_onTapoDevicesChanged);
     _ble.removeListener(_onBleStateChanged);
 
-    _ble.onStatus           = null;
-    _mqtt.onCommand         = null;
-    _mqtt.onFlowsReceived   = null;
+    _ble.onStatus = null;
+    _mqtt.onCommand = null;
+    _mqtt.onFlowsReceived = null;
     _mqtt.onHistoryReceived = null;
+    _mqtt.onTapoDevicesReceived = null;
+    _mqtt.onRpcRequest = null;
 
     _ble.dispose();
     _history.dispose();
@@ -429,8 +460,8 @@ void _publishTapoDevices() {
 
   @override
   Widget build(BuildContext context) {
-    final isIt     = Localizations.localeOf(context).languageCode == 'it';
-    final strings  = AppStrings(isIt);
+    final isIt = Localizations.localeOf(context).languageCode == 'it';
+    final strings = AppStrings(isIt);
 
     if (!_bootstrapped) {
       return Scaffold(
@@ -454,41 +485,55 @@ void _publishTapoDevices() {
           );
 
     final automationsTab = AutomationsTab(
-      flows:          _flows,
-      settings:       _settings,
-      strings:        strings,
-      tapoDevices:    _tapoDevices.devices,
-      history:        _history,
+      flows: _flows,
+      settings: _settings,
+      strings: strings,
+      tapoDevices: _tapoDevices.devices,
+      history: _history,
       onFlowsChanged: _onFlowsChanged,
-      isClientMode:   isClientMode,
+      isClientMode: isClientMode,
     );
 
     final settingsTab = SettingsTab(
-      settings:               _settings,
-      mqttSettings:           _mqttSettings,
-      mqtt:                   _mqtt,
-      strings:                strings,
-      onSettingsChanged:      _onSettingsChanged,
-      onMqttSettingsChanged:  _onMqttSettingsChanged,
+      settings: _settings,
+      mqttSettings: _mqttSettings,
+      mqtt: _mqtt,
+      strings: strings,
+      onSettingsChanged: _onSettingsChanged,
+      onMqttSettingsChanged: _onMqttSettingsChanged,
     );
 
-    final devicesTab = DevicesTab(
-      tapoDevices: _tapoDevices,
-      tapo:        _tapo,
-      strings:     strings,
-    );
+    // In client mode the DevicesTab is driven by MQTT-synced device state
+    // from [TapoDeviceService.replaceAll]. Outlet toggles go via RPC.
+    final devicesTab = isClientMode
+        ? DevicesTab(
+            tapoDevices: _tapoDevices,
+            tapo: _tapo,
+            strings: strings,
+            mqttClient: _mqtt,
+          )
+        : DevicesTab(
+            tapoDevices: _tapoDevices,
+            tapo: _tapo,
+            strings: strings,
+          );
 
     // ── Navigation ─────────────────────────────────────────────────────────
     final List<Widget> tabScreens;
     final List<NavigationDestination> destinations;
 
     if (isClientMode) {
-      tabScreens = [controlTab, automationsTab, settingsTab];
+      tabScreens = [controlTab, devicesTab, automationsTab, settingsTab];
       destinations = [
         NavigationDestination(
           icon: const Icon(Icons.cloud_outlined),
           selectedIcon: const Icon(Icons.cloud_rounded),
           label: strings.t('tab_control'),
+        ),
+        NavigationDestination(
+          icon: const Icon(Icons.power_outlined),
+          selectedIcon: const Icon(Icons.power_rounded),
+          label: strings.t('tab_devices'),
         ),
         NavigationDestination(
           icon: const Icon(Icons.auto_mode_outlined),
@@ -553,7 +598,8 @@ void _publishTapoDevices() {
               decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(
-                    color: Theme.of(context).colorScheme.outlineVariant,
+                    color:
+                        Theme.of(context).colorScheme.outlineVariant,
                     width: 1,
                   ),
                 ),
@@ -578,7 +624,7 @@ class _MqttModeStrip extends StatelessWidget {
   const _MqttModeStrip({required this.mqtt, required this.mode});
 
   final MqttService mqtt;
-  final AppMode     mode;
+  final AppMode mode;
 
   @override
   Widget build(BuildContext context) {
@@ -614,14 +660,26 @@ class _MqttModeStrip extends StatelessWidget {
   (Color, Color, IconData, String) _resolve() {
     final tag = mode == AppMode.gateway ? 'GATEWAY' : 'CLIENT';
     if (mqtt.isConnecting) {
-      return (AppColors.warningSurface, AppColors.warning,
-          Icons.pending_rounded, '$tag · Connecting…');
+      return (
+        AppColors.warningSurface,
+        AppColors.warning,
+        Icons.pending_rounded,
+        '$tag · Connecting…',
+      );
     }
     if (mqtt.isConnected) {
-      return (AppColors.successSurface, AppColors.success,
-          Icons.cloud_done_rounded, '$tag · MQTT connected');
+      return (
+        AppColors.successSurface,
+        AppColors.success,
+        Icons.cloud_done_rounded,
+        '$tag · MQTT connected',
+      );
     }
-    return (AppColors.errorSurface, AppColors.error,
-        Icons.cloud_off_rounded, '$tag · MQTT disconnected — check Settings');
+    return (
+      AppColors.errorSurface,
+      AppColors.error,
+      Icons.cloud_off_rounded,
+      '$tag · MQTT disconnected — check Settings',
+    );
   }
 }
