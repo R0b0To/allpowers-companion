@@ -316,6 +316,7 @@ final class AppCoordinator extends ChangeNotifier {
     if (!wasClient && nowClient) {
       await ForegroundService.stop();
     } else if (wasClient && !nowClient) {
+      tapoDevices.resumeLocalPolling(); 
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
     }
@@ -379,7 +380,7 @@ final class AppCoordinator extends ChangeNotifier {
   // ── Derived helpers used by MainShell ──────────────────────────────────────
 
   /// Number of bottom-nav tabs for the current mode.
-  int get tabCount => mqttSettings.mode == AppMode.client ? 3 : 5;
+  int get tabCount => mqttSettings.mode == AppMode.client ? 4 : 5;
 
   // ── Dispose ────────────────────────────────────────────────────────────────
 

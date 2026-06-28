@@ -78,6 +78,19 @@ class _MainShellState extends State<MainShell> {
             permissionsPermanentlyDenied: c.permissionsPermanentlyDenied,
           );
 
+    final devicesTab = isClientMode
+        ? DevicesTab(
+            tapoDevices: c.tapoDevices,
+            tapo: c.tapo,
+            strings: strings,
+            mqttClient: c.mqtt,
+          )
+        : DevicesTab(
+            tapoDevices: c.tapoDevices,
+            tapo: c.tapo,
+            strings: strings,
+          );
+
     final automationsTab = AutomationsTab(
       flows:          c.flows,
       settings:       c.settings,
@@ -103,12 +116,17 @@ class _MainShellState extends State<MainShell> {
     final List<NavigationDestination> destinations;
 
     if (isClientMode) {
-      tabScreens = [controlTab, automationsTab, settingsTab];
+      tabScreens = [controlTab, devicesTab, automationsTab, settingsTab];
       destinations = [
         NavigationDestination(
           icon: const Icon(Icons.cloud_outlined),
           selectedIcon: const Icon(Icons.cloud_rounded),
           label: strings.t('tab_control'),
+        ),
+        NavigationDestination(
+          icon: const Icon(Icons.power_outlined),
+          selectedIcon: const Icon(Icons.power_rounded),
+          label: strings.t('tab_devices'),
         ),
         NavigationDestination(
           icon: const Icon(Icons.auto_mode_outlined),
@@ -124,7 +142,7 @@ class _MainShellState extends State<MainShell> {
     } else {
       tabScreens = [
         controlTab,
-        DevicesTab(tapoDevices: c.tapoDevices, tapo: c.tapo, strings: strings),
+        devicesTab,
         automationsTab,
         EnergyTab(energyLog: c.energyLog, strings: strings),
         settingsTab,
