@@ -11,9 +11,6 @@ import '../utils/logger.dart';
 /// Owns the entire Bluetooth connection lifecycle: scanning, connecting,
 /// reconnecting to a previously paired station, decoding status packets,
 /// and sending outlet commands.
-///
-/// See the previous review session for full design notes. The only
-/// dependency change here is [StorageService] → [BleRepository].
 class BleService extends ChangeNotifier {
   BleService(this._repository);
 
@@ -29,7 +26,7 @@ class BleService extends ChangeNotifier {
   BluetoothAdapterState blueAdapterState = BluetoothAdapterState.unknown;
   String? lastError;
 
-  /// Only called when [status] actually changes (fixed in review session 1).
+  /// Only called when [status] actually changes.
   void Function(PowerStationStatus status)? onStatus;
 
   // ── Private ────────────────────────────────────────────────────────────────
@@ -106,7 +103,9 @@ class BleService extends ChangeNotifier {
   Future<void> _cleanupAfterFailedConnect(BluetoothDevice device) async {
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
-    try { await device.disconnect(); } catch (_) {}
+    try {
+      await device.disconnect();
+    } catch (_) {}
     isAutoConnecting = false;
     lastError = 'Connection timed out';
     notifyListeners();
@@ -126,7 +125,10 @@ class BleService extends ChangeNotifier {
     notifyListeners();
     FlutterBluePlus.startScan(timeout: BleConstants.scanDuration);
     _scanSubscription = FlutterBluePlus.scanResults.listen(
-      (results) { scanResults = results; notifyListeners(); },
+      (results) {
+        scanResults = results;
+        notifyListeners();
+      },
       onError: (Object e) {
         Log.e('BleService', 'Scan error', e);
         lastError = 'Scan failed';
@@ -134,7 +136,10 @@ class BleService extends ChangeNotifier {
       },
     );
     _isScanningSubscription = FlutterBluePlus.isScanning.listen((scanning) {
-      if (isScanning != scanning) { isScanning = scanning; notifyListeners(); }
+      if (isScanning != scanning) {
+        isScanning = scanning;
+        notifyListeners();
+      }
     });
   }
 
@@ -156,12 +161,16 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  void _watchConnectionState(BluetoothDevice device, {VoidCallback? onFirstConnect}) {
+  void _watchConnectionState(BluetoothDevice device,
+      {VoidCallback? onFirstConnect}) {
     _connectionSubscription?.cancel();
     bool firstConnect = true;
     _connectionSubscription = device.connectionState.listen((state) {
       if (state == BluetoothConnectionState.connected) {
-        if (firstConnect) { firstConnect = false; onFirstConnect?.call(); }
+        if (firstConnect) {
+          firstConnect = false;
+          onFirstConnect?.call();
+        }
         unawaited(_setupConnectedDevice(device));
       } else if (state == BluetoothConnectionState.disconnected) {
         _handleDisconnect(retry: true);
@@ -177,7 +186,9 @@ class BleService extends ChangeNotifier {
     _readCharacteristic = null;
     _writeCharacteristic = null;
     notifyListeners();
-    if (retry && _savedDeviceId != null && blueAdapterState == BluetoothAdapterState.on) {
+    if (retry &&
+        _savedDeviceId != null &&
+        blueAdapterState == BluetoothAdapterState.on) {
       Log.i('BleService', 'Unexpected disconnect — scheduling reconnect in '
           '${BleConstants.reconnectDelay.inSeconds}s');
       isAutoConnecting = true;
@@ -207,24 +218,31 @@ class BleService extends ChangeNotifier {
       for (final service in services) {
         for (final char in service.characteristics) {
           final uuid = char.uuid.toString().toLowerCase();
-          if (BleConstants.readCharacteristicHints.any(uuid.contains))  readChar  = char;
-          if (BleConstants.writeCharacteristicHints.any(uuid.contains)) writeChar = char;
+          if (BleConstants.readCharacteristicHints.any(uuid.contains)) {
+            readChar = char;
+          }
+          if (BleConstants.writeCharacteristicHints.any(uuid.contains)) {
+            writeChar = char;
+          }
         }
       }
       if (readChar == null || writeChar == null) {
-        Log.e('BleService', 'Required characteristics not found on ${device.platformName}');
+        Log.e('BleService',
+            'Required characteristics not found on ${device.platformName}');
         lastError = 'Device not supported — characteristics not found';
         notifyListeners();
         return;
       }
-      _readCharacteristic  = readChar;
+      _readCharacteristic = readChar;
       _writeCharacteristic = writeChar;
       _savedDeviceId = device.remoteId.toString();
       await _repository.setSavedDeviceId(_savedDeviceId!);
       await _readCharacteristic!.setNotifyValue(true);
-      _notifySubscription = _readCharacteristic!.onValueReceived.listen(_parseStatusPacket);
+      _notifySubscription =
+          _readCharacteristic!.onValueReceived.listen(_parseStatusPacket);
       await _writeData(BleConstants.requestStatusCommand);
-      Log.i('BleService', 'Connected and subscribed to ${device.platformName}');
+      Log.i('BleService',
+          'Connected and subscribed to ${device.platformName}');
     } catch (e) {
       Log.e('BleService', 'Setup failed after connect', e);
       lastError = 'Setup failed';
@@ -244,8 +262,12 @@ class BleService extends ChangeNotifier {
     _notifySubscription = null;
     final device = connectedDevice;
     if (device != null) {
-      try { await device.disconnect(); }
-      catch (e) { Log.w('BleService', 'Disconnect on forget failed (ignoring): $e'); }
+      try {
+        await device.disconnect();
+      } catch (e) {
+        Log.w('BleService',
+            'Disconnect on forget failed (ignoring): $e');
+      }
     }
     connectedDevice = null;
     isConnected = false;
@@ -260,30 +282,51 @@ class BleService extends ChangeNotifier {
   // ── Packet parsing ─────────────────────────────────────────────────────────
 
   void _parseStatusPacket(List<int> bytes) {
-    if (bytes.length < 6) return;
-    final packetType = bytes[5];
-    if (packetType != BleConstants.statusPacketType ||
-        bytes.length < BleConstants.minStatusPacketLength) return;
+    // Minimum length check before anything else.
+    if (bytes.length < BleConstants.minStatusPacketLength) return;
 
-    final batteryLevel     = bytes[BleConstants.batteryLevelOffset];
-    final inputWatts       = (bytes[BleConstants.inputWattsHighByteOffset]       << 8) | bytes[BleConstants.inputWattsHighByteOffset + 1];
-    final outputWatts      = (bytes[BleConstants.outputWattsHighByteOffset]      << 8) | bytes[BleConstants.outputWattsHighByteOffset + 1];
-    final minutesRemaining = (bytes[BleConstants.minutesRemainingHighByteOffset] << 8) | bytes[BleConstants.minutesRemainingHighByteOffset + 1];
+    // FIX: validate the protocol header bytes at offsets 0 and 1 FIRST.
+    // Previously only bytes[5] (packet type) was checked. A spurious BLE
+    // notification from another characteristic — or any 16+ byte payload that
+    // happens to have 0x08 at offset 5 — would silently corrupt the displayed
+    // station state. Checking the two-byte magic header prevents this.
+    if (bytes[0] != BleConstants.header1 || bytes[1] != BleConstants.header2) {
+      Log.d('BleService',
+          'Ignoring packet with unknown header: '
+          '0x${bytes[0].toRadixString(16)} 0x${bytes[1].toRadixString(16)}');
+      return;
+    }
+
+    final packetType = bytes[5];
+    if (packetType != BleConstants.statusPacketType) return;
+
+    final batteryLevel = bytes[BleConstants.batteryLevelOffset];
+    final inputWatts = (bytes[BleConstants.inputWattsHighByteOffset] << 8) |
+        bytes[BleConstants.inputWattsHighByteOffset + 1];
+    final outputWatts = (bytes[BleConstants.outputWattsHighByteOffset] << 8) |
+        bytes[BleConstants.outputWattsHighByteOffset + 1];
+    final minutesRemaining =
+        (bytes[BleConstants.minutesRemainingHighByteOffset] << 8) |
+            bytes[BleConstants.minutesRemainingHighByteOffset + 1];
 
     final PowerStationStatus newStatus;
     if (_inManualOverrideWindow) {
       newStatus = status.copyWith(
-        batteryLevel: batteryLevel, inputWatts: inputWatts,
-        outputWatts: outputWatts, minutesRemaining: minutesRemaining,
+        batteryLevel: batteryLevel,
+        inputWatts: inputWatts,
+        outputWatts: outputWatts,
+        minutesRemaining: minutesRemaining,
       );
     } else {
       final socketMask = bytes[BleConstants.socketMaskOffset];
       newStatus = status.copyWith(
-        batteryLevel: batteryLevel, inputWatts: inputWatts,
-        outputWatts: outputWatts, minutesRemaining: minutesRemaining,
+        batteryLevel: batteryLevel,
+        inputWatts: inputWatts,
+        outputWatts: outputWatts,
+        minutesRemaining: minutesRemaining,
         isUsbOn: (socketMask & BleConstants.usbMask) != 0,
-        isAcOn:  (socketMask & BleConstants.acMask)  != 0,
-        isDcOn:  (socketMask & BleConstants.dcMask)  != 0,
+        isAcOn: (socketMask & BleConstants.acMask) != 0,
+        isDcOn: (socketMask & BleConstants.dcMask) != 0,
       );
     }
 
@@ -297,8 +340,8 @@ class BleService extends ChangeNotifier {
   // ── Outlet commands ────────────────────────────────────────────────────────
 
   Future<void> setUsb(bool enable) => _setSocket(usb: enable);
-  Future<void> setAc(bool enable)  => _setSocket(ac: enable);
-  Future<void> setDc(bool enable)  => _setSocket(dc: enable);
+  Future<void> setAc(bool enable) => _setSocket(ac: enable);
+  Future<void> setDc(bool enable) => _setSocket(dc: enable);
 
   Future<void> _setSocket({bool? usb, bool? ac, bool? dc}) async {
     _lastManualCommandTime = DateTime.now();
@@ -307,8 +350,8 @@ class BleService extends ChangeNotifier {
 
     int stateByte = 0;
     if (status.isUsbOn) stateByte |= BleConstants.usbMask;
-    if (status.isAcOn)  stateByte |= BleConstants.acMask;
-    if (status.isDcOn)  stateByte |= BleConstants.dcMask;
+    if (status.isAcOn) stateByte |= BleConstants.acMask;
+    if (status.isDcOn) stateByte |= BleConstants.dcMask;
 
     final payload = [
       BleConstants.header1, BleConstants.header2, 0x00, 0xb1,
@@ -323,11 +366,13 @@ class BleService extends ChangeNotifier {
   Future<void> _writeData(List<int> payload) async {
     final char = _writeCharacteristic;
     if (char == null) {
-      Log.w('BleService', 'Write attempted with no characteristic — ignoring');
+      Log.w('BleService',
+          'Write attempted with no characteristic — ignoring');
       return;
     }
     try {
-      await char.write(payload, withoutResponse: char.properties.writeWithoutResponse);
+      await char.write(payload,
+          withoutResponse: char.properties.writeWithoutResponse);
     } catch (e) {
       Log.e('BleService', 'Write failed', e);
     }
@@ -342,7 +387,9 @@ class BleService extends ChangeNotifier {
     _isScanningSubscription?.cancel();
     _notifySubscription?.cancel();
     _connectionSubscription?.cancel();
-    try { connectedDevice?.disconnect(); } catch (_) {}
+    try {
+      connectedDevice?.disconnect();
+    } catch (_) {}
     super.dispose();
   }
 }

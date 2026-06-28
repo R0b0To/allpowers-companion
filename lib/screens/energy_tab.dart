@@ -9,6 +9,48 @@ import '../widgets/metric_card.dart';
 
 enum _Range { threeHours, sixHours, day, week, month, all }
 
+// ── Aggregated stats — computed once per filtered entry list ──────────────────
+
+/// Holds pre-computed aggregate values for [_StatsGrid].
+///
+/// Previously this computation ran inside `build()` on every frame, which
+/// meant O(n) work on every chart drag gesture, range change, and
+/// AnimatedBuilder rebuild. By computing it once from [filteredEntries] and
+/// passing it down as an immutable value object, [_StatsGrid.build] becomes
+/// O(1) — it just formats numbers into strings.
+class _AggregateStats {
+  const _AggregateStats({
+    required this.avgIn,
+    required this.avgOut,
+    required this.peakIn,
+    required this.peakOut,
+  });
+
+  final int avgIn;
+  final int avgOut;
+  final int peakIn;
+  final int peakOut;
+
+  static _AggregateStats compute(List<EnergyLogEntry> entries) {
+    if (entries.isEmpty) {
+      return const _AggregateStats(avgIn: 0, avgOut: 0, peakIn: 0, peakOut: 0);
+    }
+    int sumIn = 0, sumOut = 0, peakIn = 0, peakOut = 0;
+    for (final e in entries) {
+      sumIn += e.inputWatts;
+      sumOut += e.outputWatts;
+      if (e.inputWatts > peakIn) peakIn = e.inputWatts;
+      if (e.outputWatts > peakOut) peakOut = e.outputWatts;
+    }
+    return _AggregateStats(
+      avgIn: sumIn ~/ entries.length,
+      avgOut: sumOut ~/ entries.length,
+      peakIn: peakIn,
+      peakOut: peakOut,
+    );
+  }
+}
+
 /// Displays battery and power trend graphs derived from [EnergyLogService]'s
 /// periodically-sampled history.
 class EnergyTab extends StatefulWidget {
@@ -27,9 +69,13 @@ class EnergyTab extends StatefulWidget {
 
 class _EnergyTabState extends State<EnergyTab> {
   _Range _range = _Range.day;
-
-  /// Raw interpolated time reported by either chart's drag gesture.
   DateTime? _selectedTime;
+
+  // Cache the last filtered list and its stats so we don't recompute on
+  // every chart crosshair drag (which calls setState but doesn't change
+  // the underlying data).
+  List<EnergyLogEntry>? _cachedEntries;
+  _AggregateStats? _cachedStats;
 
   Duration? get _rangeDuration => switch (_range) {
         _Range.threeHours => const Duration(hours: 3),
@@ -45,9 +91,21 @@ class _EnergyTabState extends State<EnergyTab> {
     return d == null ? widget.energyLog.entries : widget.energyLog.since(d);
   }
 
-  /// The entry closest to [time] within [entries], or null.
-  EnergyLogEntry? _nearestEntry(
-      DateTime time, List<EnergyLogEntry> entries) {
+  /// Returns filtered entries and recomputes aggregate stats only when the
+  /// underlying list reference changes. A crosshair drag calls setState but
+  /// does not change [_filteredEntries()], so [_cachedStats] is reused.
+  (List<EnergyLogEntry>, _AggregateStats) _entriesAndStats() {
+    final entries = _filteredEntries();
+    // List equality by identity is sufficient here: EnergyLogService returns
+    // the same list reference until a new sample is appended.
+    if (!identical(entries, _cachedEntries)) {
+      _cachedEntries = entries;
+      _cachedStats = _AggregateStats.compute(entries);
+    }
+    return (entries, _cachedStats!);
+  }
+
+  EnergyLogEntry? _nearestEntry(DateTime time, List<EnergyLogEntry> entries) {
     if (entries.isEmpty) return null;
     final ms = time.millisecondsSinceEpoch;
     EnergyLogEntry? nearest;
@@ -67,7 +125,6 @@ class _EnergyTabState extends State<EnergyTab> {
 
   void _stepSelection(int offset, List<EnergyLogEntry> entries) {
     if (entries.isEmpty) return;
-
     final selectedEntry =
         _selectedTime != null ? _nearestEntry(_selectedTime!, entries) : null;
     if (selectedEntry == null) {
@@ -77,14 +134,10 @@ class _EnergyTabState extends State<EnergyTab> {
       });
       return;
     }
-
     final currentIndex = entries.indexOf(selectedEntry);
     if (currentIndex == -1) return;
-
     final newIndex = (currentIndex + offset).clamp(0, entries.length - 1);
-    setState(() {
-      _selectedTime = entries[newIndex].timestamp;
-    });
+    setState(() => _selectedTime = entries[newIndex].timestamp);
   }
 
   @override
@@ -103,8 +156,7 @@ class _EnergyTabState extends State<EnergyTab> {
     }
 
     final s = widget.strings;
-
-    final entries = _filteredEntries();
+    final (entries, stats) = _entriesAndStats();
 
     final selectedEntry =
         _selectedTime != null ? _nearestEntry(_selectedTime!, entries) : null;
@@ -151,6 +203,9 @@ class _EnergyTabState extends State<EnergyTab> {
                   strings: s,
                   onChanged: (r) => setState(() {
                     _range = r;
+                    // Invalidate the cache when the range changes so stats
+                    // are recomputed for the new filtered set.
+                    _cachedEntries = null;
                     _clearSelection();
                   }),
                 ),
@@ -191,7 +246,8 @@ class _EnergyTabState extends State<EnergyTab> {
             ),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
-                _StatsGrid(entries: entries, strings: s),
+                // Pass pre-computed stats — build() is now O(1).
+                _StatsGrid(stats: stats, strings: s),
                 const SizedBox(height: AppSpacing.lg),
 
                 AnimatedSize(
@@ -349,12 +405,13 @@ class _EnergyTabState extends State<EnergyTab> {
     );
     if (confirmed == true) {
       _clearSelection();
+      _cachedEntries = null;
       await widget.energyLog.clear();
     }
   }
 }
 
-// ── Detail inspection card with stepper ───────────────────────────────────────
+// ── Detail inspection card ────────────────────────────────────────────────────
 
 class _DetailCard extends StatelessWidget {
   const _DetailCard({
@@ -398,7 +455,7 @@ class _DetailCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceElevated,
         borderRadius: AppRadius.mdBR,
-        border: Border.all(color: AppColors.teal.withValues(alpha:0.3)),
+        border: Border.all(color: AppColors.teal.withValues(alpha: 0.3)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -407,22 +464,19 @@ class _DetailCard extends StatelessWidget {
             onPressed: onPrevious,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
-            icon: Icon(
-              Icons.chevron_left_rounded,
-              color: onPrevious != null
-                  ? AppColors.teal
-                  : AppColors.textDisabled,
-            ),
+            icon: Icon(Icons.chevron_left_rounded,
+                color: onPrevious != null
+                    ? AppColors.teal
+                    : AppColors.textDisabled),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(_formatDate(local), style: AppTypography.labelSm),
-              Text(
-                _formatTime(local),
-                style: AppTypography.headingMd.copyWith(color: AppColors.teal),
-              ),
+              Text(_formatTime(local),
+                  style:
+                      AppTypography.headingMd.copyWith(color: AppColors.teal)),
             ],
           ),
           Padding(
@@ -434,23 +488,20 @@ class _DetailCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _DetailMetric(
-                  icon: Icons.battery_std_rounded,
-                  color: battColor,
-                  label: 'Battery',
-                  value: '${entry.batteryLevel}%',
-                ),
+                    icon: Icons.battery_std_rounded,
+                    color: battColor,
+                    label: 'Battery',
+                    value: '${entry.batteryLevel}%'),
                 _DetailMetric(
-                  icon: Icons.arrow_downward_rounded,
-                  color: AppColors.success,
-                  label: strings.t('charging'),
-                  value: '${entry.inputWatts} W',
-                ),
+                    icon: Icons.arrow_downward_rounded,
+                    color: AppColors.success,
+                    label: strings.t('charging'),
+                    value: '${entry.inputWatts} W'),
                 _DetailMetric(
-                  icon: Icons.arrow_upward_rounded,
-                  color: AppColors.error,
-                  label: strings.t('discharging'),
-                  value: '${entry.outputWatts} W',
-                ),
+                    icon: Icons.arrow_upward_rounded,
+                    color: AppColors.error,
+                    label: strings.t('discharging'),
+                    value: '${entry.outputWatts} W'),
                 _OutletStateColumn(entry: entry),
               ],
             ),
@@ -459,10 +510,9 @@ class _DetailCard extends StatelessWidget {
             onPressed: onNext,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
-            icon: Icon(
-              Icons.chevron_right_rounded,
-              color: onNext != null ? AppColors.teal : AppColors.textDisabled,
-            ),
+            icon: Icon(Icons.chevron_right_rounded,
+                color:
+                    onNext != null ? AppColors.teal : AppColors.textDisabled),
           ),
           const SizedBox(width: AppSpacing.xs),
           GestureDetector(
@@ -527,14 +577,12 @@ class _OutletStateColumn extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 3),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          color: color.withValues(alpha:active ? 0.12 : 0.06),
+          color: color.withValues(alpha: active ? 0.12 : 0.06),
           borderRadius: AppRadius.xsBR,
         ),
-        child: Text(
-          label,
-          style: AppTypography.labelSm
-              .copyWith(color: color, fontSize: 8, letterSpacing: 0.3),
-        ),
+        child: Text(label,
+            style: AppTypography.labelSm
+                .copyWith(color: color, fontSize: 8, letterSpacing: 0.3)),
       );
     }
 
@@ -565,7 +613,6 @@ class _RangeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
     final options = {
       _Range.threeHours: '3h',
       _Range.sixHours: '6h',
@@ -590,14 +637,11 @@ class _RangeSelector extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: selected
-                      ? AppColors.tealSurface
-                      : AppColors.surface,
-                  borderRadius:
-                      BorderRadius.circular(AppRadius.full),
+                  color: selected ? AppColors.tealSurface : AppColors.surface,
+                  borderRadius: BorderRadius.circular(AppRadius.full),
                   border: Border.all(
                     color: selected
-                        ? AppColors.teal.withValues(alpha:0.4)
+                        ? AppColors.teal.withValues(alpha: 0.4)
                         : AppColors.border,
                   ),
                 ),
@@ -668,11 +712,10 @@ class _Legend extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 8,
-          height: 8,
-          decoration:
-              BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
+            width: 8,
+            height: 8,
+            decoration:
+                BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: AppSpacing.xs),
         Text(label, style: AppTypography.labelSm),
       ],
@@ -682,26 +725,18 @@ class _Legend extends StatelessWidget {
 
 // ── Aggregate stats row ───────────────────────────────────────────────────────
 
+/// Receives pre-computed [_AggregateStats] rather than the raw entry list.
+///
+/// FIX: `build()` is now O(1) — the previous O(n) loop has been moved to
+/// [_AggregateStats.compute], called once per filtered list change.
 class _StatsGrid extends StatelessWidget {
-  const _StatsGrid({required this.entries, required this.strings});
+  const _StatsGrid({required this.stats, required this.strings});
 
-  final List<EnergyLogEntry> entries;
+  final _AggregateStats stats;
   final AppStrings strings;
 
   @override
   Widget build(BuildContext context) {
-
-    int sumIn = 0, sumOut = 0, peakIn = 0, peakOut = 0;
-    for (final e in entries) {
-      sumIn += e.inputWatts;
-      sumOut += e.outputWatts;
-      if (e.inputWatts > peakIn) peakIn = e.inputWatts;
-      if (e.outputWatts > peakOut) peakOut = e.outputWatts;
-    }
-    final count = entries.length;
-    final avgIn = count == 0 ? 0 : sumIn ~/ count;
-    final avgOut = count == 0 ? 0 : sumOut ~/ count;
-
     return Row(
       children: [
         Expanded(
@@ -709,8 +744,8 @@ class _StatsGrid extends StatelessWidget {
             icon: Icons.arrow_downward_rounded,
             iconColor: AppColors.success,
             title: strings.t('avg_input'),
-            value: '$avgIn W',
-            subtitle: '${strings.t('peak_input')}: $peakIn W',
+            value: '${stats.avgIn} W',
+            subtitle: '${strings.t('peak_input')}: ${stats.peakIn} W',
           ),
         ),
         const SizedBox(width: AppSpacing.md),
@@ -719,8 +754,8 @@ class _StatsGrid extends StatelessWidget {
             icon: Icons.arrow_upward_rounded,
             iconColor: AppColors.error,
             title: strings.t('avg_output'),
-            value: '$avgOut W',
-            subtitle: '${strings.t('peak_output')}: $peakOut W',
+            value: '${stats.avgOut} W',
+            subtitle: '${strings.t('peak_output')}: ${stats.peakOut} W',
           ),
         ),
       ],

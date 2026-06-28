@@ -15,23 +15,11 @@ import '../utils/logger.dart';
 
 /// Manages the MQTT connection in both Gateway and Client modes.
 ///
-/// ## History sync
-/// Gateway publishes new history entries to `{prefix}/history` (not retained)
-/// so clients receive them in real time. On connect, the gateway also
-/// publishes a snapshot of recent history to `{prefix}/history/snapshot`
-/// (retained, QoS 1) so freshly-connected clients get the full picture.
-///
-/// ## Tapo device sync
-/// Gateway publishes the full device list (including runtime state) to
-/// `{prefix}/tapo/devices` (retained) whenever device state changes.
-/// Clients subscribe and call [onTapoDevicesReceived] to update their
-/// local [TapoDeviceService] via [TapoDeviceService.replaceAll].
-///
-/// ## RPC layer
-/// Client calls [call] to send a typed request to the gateway.
-/// Gateway receives it on [rpcRequestTopic], dispatches via [onRpcRequest],
-/// and publishes the response to [rpcResponseTopic].
-/// Client matches the response by correlation ID and completes the [Future].
+/// ## RPC correlation IDs
+/// IDs are generated with a per-instance atomic counter combined with the
+/// microsecond timestamp. The counter eliminates the (rare but real)
+/// collision that occurs when two calls arrive in the same microsecond on
+/// platforms where the clock doesn't advance between Dart microtasks.
 final class MqttService extends ChangeNotifier {
   MqttServerClient? _client;
   MqttSettings _settings = const MqttSettings();
@@ -41,6 +29,10 @@ final class MqttService extends ChangeNotifier {
   final Map<String, Completer<RpcResponse>> _rpcPending = {};
   static const _rpcTimeout = Duration(seconds: 10);
   static const int _maxBackoffSeconds = 60;
+
+  // FIX: atomic counter for RPC IDs — prevents collision when two calls are
+  // made in the same microsecond (possible on some platforms / test runners).
+  int _rpcCounter = 0;
 
   // ── Public state ───────────────────────────────────────────────────────────
   PowerStationStatus _remoteStatus = const PowerStationStatus();
@@ -55,8 +47,6 @@ final class MqttService extends ChangeNotifier {
   void Function(List<AutomationFlow> flows)? onFlowsReceived;
   void Function(List<AutomationHistoryEntry> entries)? onHistoryReceived;
   void Function(List<TapoDevice> devices)? onTapoDevicesReceived;
-
-  /// Gateway-side RPC dispatcher. Returns the result map (or throws on failure).
   Future<dynamic> Function(String method, Map<String, dynamic> params)?
       onRpcRequest;
 
@@ -94,15 +84,9 @@ final class MqttService extends ChangeNotifier {
     Log.i('MqttService', 'Flows published (${flows.length} flow(s))');
   }
 
-  /// Gateway: publishes the full Tapo device list with runtime state.
-  ///
-  /// Each entry includes the persisted fields from [TapoDevice.toJson] plus
-  /// runtime-only [isOnline], [isOn], and [model] so clients can display
-  /// live state without polling the plugs themselves.
   void publishTapoDevices(List<TapoDevice> devices) {
     if (!_isConnected || _settings.mode != AppMode.gateway) return;
     final payload = devices.map((d) {
-      // Build a complete map: persisted config + runtime state.
       return {
         ...d.toJson(),
         'isOnline': d.isOnline,
@@ -119,7 +103,6 @@ final class MqttService extends ChangeNotifier {
         'Tapo devices published (${devices.length} device(s))');
   }
 
-  /// Gateway: publishes a single new history entry (not retained — live events).
   void publishHistoryEntry(AutomationHistoryEntry entry) {
     if (!_isConnected || _settings.mode != AppMode.gateway) return;
     _publish(
@@ -129,7 +112,6 @@ final class MqttService extends ChangeNotifier {
     );
   }
 
-  /// Gateway: publishes a full history snapshot (retained so clients get it on connect).
   void publishHistorySnapshot(List<AutomationHistoryEntry> entries) {
     if (!_isConnected || _settings.mode != AppMode.gateway) return;
     final payload = jsonEncode(entries.map((e) => e.toJson()).toList());
@@ -303,7 +285,6 @@ final class MqttService extends ChangeNotifier {
       final raw =
           MqttPublishPayload.bytesToStringAsString(pub.payload.message);
       try {
-        // ── Shared topics (order matters — most specific first) ─────────────
         if (event.topic == _settings.flowsTopic) {
           _handleFlowsSync(raw);
           continue;
@@ -334,7 +315,6 @@ final class MqttService extends ChangeNotifier {
           continue;
         }
 
-        // ── Mode-specific topics ────────────────────────────────────────────
         if (_settings.mode == AppMode.client &&
             event.topic == _settings.statusTopic) {
           _handleStatus(raw);
@@ -563,7 +543,10 @@ final class MqttService extends ChangeNotifier {
       return RpcResponse(id: '', ok: false, error: 'Not connected');
     }
 
-    final id = 'rpc_${DateTime.now().microsecondsSinceEpoch}';
+    // FIX: include an atomic counter suffix so two calls arriving in the same
+    // microsecond always get distinct IDs, preventing completer cross-wiring.
+    final id =
+        'rpc_${DateTime.now().microsecondsSinceEpoch}_${++_rpcCounter}';
     final req = RpcRequest(id: id, method: method, params: params);
 
     final completer = Completer<RpcResponse>();
@@ -580,13 +563,11 @@ final class MqttService extends ChangeNotifier {
       return RpcResponse(
         id: id,
         ok: false,
-        error:
-            'Gateway did not respond within ${_rpcTimeout.inSeconds}s',
+        error: 'Gateway did not respond within ${_rpcTimeout.inSeconds}s',
       );
     }
   }
 
-  /// Cancels all pending RPC calls (call on disconnect/dispose).
   void _cancelPendingRpc([String reason = 'Disconnected']) {
     for (final entry in _rpcPending.entries) {
       if (!entry.value.isCompleted) {
@@ -644,8 +625,7 @@ final class MqttService extends ChangeNotifier {
     final baseId = _settings.clientId.trim().isNotEmpty
         ? _settings.clientId.trim()
         : 'ap';
-    final tag =
-        _settings.mode == AppMode.gateway ? 'gw' : 'cl';
+    final tag = _settings.mode == AppMode.gateway ? 'gw' : 'cl';
     return '${baseId}_${tag}_${DateTime.now().microsecondsSinceEpoch}';
   }
 
