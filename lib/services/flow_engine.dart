@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../models/automation_flow.dart';
 import '../models/automation_history_entry.dart';
 import '../models/automation_settings.dart';
-import '../models/tapo_device.dart';
 import '../repositories/flow_repository.dart';
 import '../utils/logger.dart';
 import 'ble_service.dart';
