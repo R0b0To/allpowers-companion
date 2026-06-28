@@ -99,6 +99,12 @@ final class TapoDeviceService extends ChangeNotifier {
     }));
   }
 
+void replaceAll(List<TapoDevice> devices) {
+  _devices = devices;
+  _isLoaded = true;
+  notifyListeners();
+}
+
   Future<void> updateDevice(TapoDevice device) async {
     _devices = _devices.map((d) => d.id == device.id ? device : d).toList();
     _tapo.resetSession(ip: device.ip, email: device.email);
@@ -156,6 +162,7 @@ final class TapoDeviceService extends ChangeNotifier {
       return null;
     }
   }
+  
 
   @override
   void dispose() {

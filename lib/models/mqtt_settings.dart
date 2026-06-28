@@ -56,6 +56,10 @@ final class MqttSettings {
 
   String get flowsTopic => '$topicPrefix/flows';
 
+  String get rpcRequestTopic  => '$topicPrefix/rpc/request';
+  String get rpcResponseTopic => '$topicPrefix/rpc/response';
+  String get tapoDevicesTopic => '$topicPrefix/tapo/devices';
+
   // ── Mutation ──────────────────────────────────────────────────────────────
 
   MqttSettings copyWith({

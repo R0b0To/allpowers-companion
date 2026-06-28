@@ -258,4 +258,29 @@ final class FlowEngine {
       unawaited(_flowRepository.setFlowTriggered(id, false));
     }
   }
+
+  /// Clears the triggered guard for a single flow so it can fire immediately.
+void resetTriggeredForFlow(String flowId) {
+  _triggered[flowId] = false;
+  unawaited(_flowRepository.setFlowTriggered(flowId, false));
+}
+
+Future<void> evaluateOnce(
+  AutomationFlow flow,
+  AutomationSettings settings,
+) async {
+  if (_running[flow.id] == true) return;
+  _running[flow.id] = true;
+  Log.i('FlowEngine', 'Manual trigger: "${flow.name}"');
+  try {
+    final triggerLevel = _ble.status.batteryLevel;
+    for (final action in flow.actions) {
+      await _execute(action, settings, triggerLevel, flow.name);
+    }
+  } catch (e) {
+    Log.e('FlowEngine', 'Error in manual trigger "${flow.name}"', e);
+  } finally {
+    _running[flow.id] = false;
+  }
+}
 }

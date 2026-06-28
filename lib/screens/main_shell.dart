@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:ap_companion/models/mqtt_rpc_methods.dart';
 import 'package:ap_companion/models/power_station_status.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -139,6 +140,11 @@ class _MainShellState extends State<MainShell> {
     _mqtt.onCommand         = _onMqttCommand;
     _mqtt.onFlowsReceived   = _onMqttFlowsReceived;
     _mqtt.onHistoryReceived = _onMqttHistoryReceived;
+    _mqtt.onRpcRequest = _onRpcRequest;
+    _mqtt.onTapoDevicesReceived = (devices) {
+  if (!mounted || _mqttSettings.mode != AppMode.client) return;
+  _tapoDevices.replaceAll(devices);  // see below
+};
     await _mqtt.configure(mqttSettings);
     if (!mounted) return;
 
@@ -147,6 +153,8 @@ class _MainShellState extends State<MainShell> {
       await ForegroundService.requestBatteryOptimizationExemption();
     }
   }
+
+  
 
   // ── BLE callbacks ──────────────────────────────────────────────────────────
 
@@ -202,10 +210,13 @@ class _MainShellState extends State<MainShell> {
   // ── Tapo polling callback ──────────────────────────────────────────────────
 
   void _onTapoDevicesChanged() {
-    if (_mqttSettings.mode != AppMode.client) {
-      _flowEngine.evaluateTapoTriggers(_flows, _settings);
-    }
+  if (_mqttSettings.mode != AppMode.client) {
+    _flowEngine.evaluateTapoTriggers(_flows, _settings);
   }
+  if (_mqttSettings.mode == AppMode.gateway) {
+    _publishTapoDevices();                    // NEW: keep clients in sync
+  }
+}
 
   // ── MQTT callbacks ─────────────────────────────────────────────────────────
 
@@ -219,6 +230,80 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  Future<dynamic> _onRpcRequest(
+  String method,
+  Map<String, dynamic> params,
+) async {
+  switch (method) {
+    // ── Outlet control ──────────────────────────────────────────────────
+    case RpcMethod.setOutlet:
+      final outlet = params['outlet'] as String;
+      final value  = params['value']  as bool;
+      _onMqttCommand(outlet, value);       // reuse existing handler
+      return {'outlet': outlet, 'value': value};
+
+    // ── Tapo control ────────────────────────────────────────────────────
+    case RpcMethod.tapoSetOn:
+      final deviceId = params['deviceId'] as String;
+      final on       = params['on']       as bool;
+      final ok = await _tapoDevices.setDeviceOn(deviceId, on);
+      // Publish updated device list so clients see the new state immediately.
+      _publishTapoDevices();
+      return {'ok': ok};
+
+    case RpcMethod.tapoRefresh:
+      await _tapoDevices.refresh();
+      _publishTapoDevices();
+      return {'count': _tapoDevices.devices.length};
+
+    // ── Flow management ─────────────────────────────────────────────────
+    case RpcMethod.flowsReplace:
+      final raw   = params['flows'] as List<dynamic>;
+      final flows = raw
+          .map((j) => AutomationFlow.tryFromJson(j as Map<String, dynamic>))
+          .whereType<AutomationFlow>()
+          .toList();
+      await _onFlowsChanged(flows);
+      return {'count': flows.length};
+
+    case RpcMethod.flowSetEnabled:
+      final flowId  = params['flowId']  as String;
+      final enabled = params['enabled'] as bool;
+      final updated = _flows
+          .map((f) => f.id == flowId ? f.copyWith(enabled: enabled) : f)
+          .toList();
+      await _onFlowsChanged(updated);
+      return {'ok': true};
+
+    case RpcMethod.flowDelete:
+      final flowId  = params['flowId'] as String;
+      final updated = _flows.where((f) => f.id != flowId).toList();
+      await _onFlowsChanged(updated);
+      return {'ok': true};
+
+    case RpcMethod.flowRun:
+      // Manual one-shot trigger: temporarily force the flow to fire
+      // by resetting its triggered guard, then calling evaluate once.
+      final flowId = params['flowId'] as String;
+      final flow   = _flows.firstWhere((f) => f.id == flowId);
+      _flowEngine.resetTriggeredForFlow(flowId);
+      await _flowEngine.evaluateOnce(flow, _settings);
+      return {'ok': true};
+
+    // ── History ─────────────────────────────────────────────────────────
+    case RpcMethod.historyClear:
+      await _history.clear();
+      return {'ok': true};
+
+    default:
+      throw ArgumentError('Unknown RPC method: $method');
+  }
+}
+
+void _publishTapoDevices() {
+  if (!_mqtt.isConnected) return;
+  _mqtt.publishTapoDevices(_tapoDevices.devices);
+}
   Future<void> _onMqttFlowsReceived(List<AutomationFlow> flows) async {
     if (!mounted || _applyingRemoteFlows) return;
     _applyingRemoteFlows = true;

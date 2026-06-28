@@ -1,3 +1,4 @@
+import 'package:ap_companion/models/mqtt_rpc_methods.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_strings.dart';
@@ -536,7 +537,12 @@ class _RemoteOutletSection extends StatelessWidget {
                 disabledLabel: strings.t('disabled'),
                 isActive: status.isUsbOn,
                 activeColor: AppColors.usb,
-                onTap: () => mqtt.sendCommand('usb', !status.isUsbOn),
+                onTap: () async {
+  final resp = await mqtt.call(
+    RpcMethod.setOutlet,
+    {'outlet': 'usb', 'value': !status.isUsbOn},
+  );
+},
               ),
               const SizedBox(width: AppSpacing.sm),
               ToggleCard(
@@ -546,7 +552,12 @@ class _RemoteOutletSection extends StatelessWidget {
                 disabledLabel: strings.t('disabled'),
                 isActive: status.isAcOn,
                 activeColor: AppColors.ac,
-                onTap: () => mqtt.sendCommand('ac', !status.isAcOn),
+                onTap: () async {
+  final resp = await mqtt.call(
+    RpcMethod.setOutlet,
+    {'outlet': 'ac', 'value': !status.isAcOn},
+  );
+},
               ),
               const SizedBox(width: AppSpacing.sm),
               ToggleCard(
@@ -556,7 +567,12 @@ class _RemoteOutletSection extends StatelessWidget {
                 disabledLabel: strings.t('disabled'),
                 isActive: status.isDcOn,
                 activeColor: AppColors.dc,
-                onTap: () => mqtt.sendCommand('dc', !status.isDcOn),
+                onTap: () async {
+  final resp = await mqtt.call(
+    RpcMethod.setOutlet,
+    {'outlet': 'dc', 'value': !status.isDcOn},
+  );
+},
               ),
             ],
           ),
