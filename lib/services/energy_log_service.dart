@@ -57,13 +57,13 @@ final class EnergyLogService extends ChangeNotifier {
     }
 
     final entry = EnergyLogEntry(
-      timestamp:   now,
+      timestamp: now,
       batteryLevel: status.batteryLevel,
-      inputWatts:  status.inputWatts,
+      inputWatts: status.inputWatts,
       outputWatts: status.outputWatts,
-      isUsbOn:     status.isUsbOn,
-      isAcOn:      status.isAcOn,
-      isDcOn:      status.isDcOn,
+      isUsbOn: status.isUsbOn,
+      isAcOn: status.isAcOn,
+      isDcOn: status.isDcOn,
     );
 
     _entries = [..._entries, entry];
@@ -78,12 +78,24 @@ final class EnergyLogService extends ChangeNotifier {
   }
 
   /// Returns entries no older than [duration] from now.
+  ///
+  /// FIX: previously returned `_entries.sublist(idx)`, which in Dart is a
+  /// fresh growable List but is filled by copying the *current* element
+  /// references in the *current* range. The bug this fixes isn't aliasing
+  /// of the backing array (sublist always copies), but call-site lifetime:
+  /// callers (e.g. EnergyTab._entriesAndStats) compare list *identity*
+  /// across rebuilds to decide whether to recompute cached stats. Returning
+  /// `List.unmodifiable(...)` here makes the immutability contract explicit
+  /// and prevents any future caller from mutating what looks like a fresh
+  /// list but is logically meant to be a read-only view, while keeping the
+  /// identity-based caching in EnergyTab correct (a new sample always
+  /// produces a new List instance here).
   List<EnergyLogEntry> since(Duration duration) {
     if (_entries.isEmpty) return const [];
     final cutoff = DateTime.now().toUtc().subtract(duration);
     final idx = _lowerBound(cutoff);
     if (idx >= _entries.length) return const [];
-    return _entries.sublist(idx);
+    return List.unmodifiable(_entries.sublist(idx));
   }
 
   /// Returns the index of the first entry whose timestamp is not before

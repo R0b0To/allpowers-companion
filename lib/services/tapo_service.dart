@@ -13,20 +13,65 @@ import '../utils/logger.dart';
 ///
 /// Sessions are keyed by `$ip:$email` and cached in memory so repeated
 /// calls to the same plug reuse the negotiated encryption context.
+///
+/// ## Session cache eviction
+/// [_sessions] is bounded at [_maxSessions] entries using LRU eviction.
+/// Without a cap, a user who edits a device's IP repeatedly, or adds and
+/// removes many plugs over time, accumulates session objects (each holding
+/// AES key material and an open `HttpClient` keep-alive state) that are
+/// never freed until [dispose] is called — which in practice means "never,
+/// for the lifetime of the app process." [_touch] promotes a key to
+/// most-recently-used on every access; insertion evicts the least-recently
+/// used entry once the cap is exceeded.
 final class TapoService {
   final HttpClient _httpClient = HttpClient();
+
+  /// Insertion order is LRU order: oldest (least-recently-used) entries are
+  /// at the front. [_touch] removes-and-reinserts a key to move it to the
+  /// back (most-recently-used) on every access.
   final Map<String, _TapoSession> _sessions = {};
+
+  /// Maximum number of concurrent sessions kept in memory. Generous enough
+  /// that typical households (a handful of plugs) never evict a session
+  /// they're actively using, but bounded so editing/re-adding devices over
+  /// months doesn't leak memory indefinitely.
+  static const int _maxSessions = 16;
+
   bool _disposed = false;
 
   _TapoSession _getOrCreateSession(String ip, String email, String password) {
     _assertNotDisposed();
     final cleanIp = _normalizeIp(ip);
     final key = '$cleanIp:$email';
-    return _sessions.putIfAbsent(
-      key,
-      () => _TapoSession(
-          ip: cleanIp, email: email, password: password, client: _httpClient),
+
+    final existing = _sessions.remove(key);
+    if (existing != null) {
+      // Re-insert at the back to mark as most-recently-used.
+      _sessions[key] = existing;
+      return existing;
+    }
+
+    final session = _TapoSession(
+      ip: cleanIp,
+      email: email,
+      password: password,
+      client: _httpClient,
     );
+    _sessions[key] = session;
+    _evictIfNeeded();
+    return session;
+  }
+
+  /// Evicts the least-recently-used session(s) once [_sessions] exceeds
+  /// [_maxSessions]. Because [Map] in Dart preserves insertion order and
+  /// [_getOrCreateSession] always re-inserts accessed keys at the back,
+  /// the first key in iteration order is always the least-recently-used.
+  void _evictIfNeeded() {
+    while (_sessions.length > _maxSessions) {
+      final lruKey = _sessions.keys.first;
+      _sessions.remove(lruKey);
+      Log.d('TapoService', 'Evicted LRU session: $lruKey');
+    }
   }
 
   static String _normalizeIp(String ip) {

@@ -14,8 +14,18 @@
 /// the application-level ones on Allpowers hardware).
 abstract final class BleConstants {
   // ── Characteristic UUID substrings ─────────────────────────────────────────
-  static const List<String> readCharacteristicHints = ['fff1', 'ffe1'];
-  static const List<String> writeCharacteristicHints = ['fff2', 'ffe2'];
+  //
+  // FIX: wrapped in List.unmodifiable. A plain `const List<String>` literal
+  // is itself immutable in Dart (the literal can't be replaced), but the
+  // List instance it produces is NOT deeply protected against mutation —
+  // calling `BleConstants.readCharacteristicHints.add('x')` would silently
+  // succeed and corrupt this "constant" for the remainder of the process.
+  // Wrapping in List.unmodifiable makes any such call throw immediately
+  // instead of corrupting shared state used by every BLE connection.
+  static final List<String> readCharacteristicHints =
+      List.unmodifiable(['fff1', 'ffe1']);
+  static final List<String> writeCharacteristicHints =
+      List.unmodifiable(['fff2', 'ffe2']);
 
   // ── Packet framing ─────────────────────────────────────────────────────────
   static const int header1 = 0xa5;
@@ -24,9 +34,15 @@ abstract final class BleConstants {
   // ── Commands ───────────────────────────────────────────────────────────────
 
   /// Sent once after connecting. Subscribes to periodic status broadcasts.
-  static const List<int> requestStatusCommand = [
+  ///
+  /// FIX: wrapped in List.unmodifiable for the same reason as the
+  /// characteristic hint lists above — this exact byte sequence is written
+  /// to the BLE characteristic on every connect, and an accidental mutation
+  /// (e.g. a caller doing `..add(0)` while building a derived packet) would
+  /// corrupt the handshake for every station this app ever talks to.
+  static final List<int> requestStatusCommand = List.unmodifiable([
     header1, header2, 0xb1, 0x00, 0x01, 0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-  ];
+  ]);
 
   // ── Status packet structure ─────────────────────────────────────────────────
   /// Value at byte [5] that identifies a full status report packet.
