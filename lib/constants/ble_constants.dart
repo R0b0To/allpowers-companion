@@ -68,11 +68,7 @@ abstract final class BleConstants {
   /// window must not overwrite the optimistic local state — the station
   /// can take several packets to reflect the relay change.
   static const Duration manualOverrideWindow = Duration(milliseconds: 1500);
-
-  /// Grace delay before retrying an auto-connect after an unexpected
-  /// disconnect, to let the OS fully tear down the prior connection.
-  static const Duration reconnectDelay = Duration(seconds: 2);
-
+  
   /// Maximum time to wait for a device to respond during auto-connect.
   static const Duration autoConnectTimeout = Duration(seconds: 20);
 
@@ -89,4 +85,19 @@ abstract final class BleConstants {
 
   /// How often the watchdog timer checks for staleness.
   static const Duration watchdogCheckInterval = Duration(seconds: 15);
+
+  /// How often to proactively re-send `requestStatusCommand` while
+  /// connected, independent of whether packets are arriving on their own.
+  /// Cheaper and faster than waiting for `staleConnectionThreshold` to force
+  /// a full disconnect/reconnect — many "stale" cases are just a missed
+  /// broadcast tick, not a dead GATT link, and a re-request alone unsticks
+  /// them in under a second.
+  static const Duration keepaliveInterval = Duration(seconds: 20);
+
+  /// Base delay for the Nth auto-reconnect attempt is
+  /// `min(reconnectBaseDelay * attempt, reconnectMaxDelay)`. Prevents
+  /// hammering a station that's actually off or out of range with a fixed
+  /// 2s retry forever, while still recovering quickly for transient drops.
+  static const Duration reconnectBaseDelay = Duration(seconds: 2);
+  static const Duration reconnectMaxDelay = Duration(seconds: 30);
 }

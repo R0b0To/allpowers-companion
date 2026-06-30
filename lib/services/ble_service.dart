@@ -37,8 +37,10 @@ class BleService extends ChangeNotifier {
   StreamSubscription<List<int>>? _notifySubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
   StreamSubscription<BluetoothAdapterState>? _adapterSubscription;
+  int _reconnectAttempts = 0;
 
   Timer? _watchdogTimer;
+  Timer? _keepaliveTimer;
 
   /// Wall-clock time of the last valid packet received from the connected
   /// device (any packet with a valid protocol header, not just full status
@@ -191,6 +193,7 @@ class BleService extends ChangeNotifier {
     _notifySubscription = null;
     isConnected = false;
     _stopWatchdog();
+    _stopKeepalive();
     isAutoConnecting = false;
     _readCharacteristic = null;
     _writeCharacteristic = null;
@@ -198,11 +201,13 @@ class BleService extends ChangeNotifier {
     if (retry &&
         _savedDeviceId != null &&
         blueAdapterState == BluetoothAdapterState.on) {
+      _reconnectAttempts++;
+      final delay = _backoffDelay(_reconnectAttempts);
       Log.i('BleService', 'Unexpected disconnect — scheduling reconnect in '
-          '${BleConstants.reconnectDelay.inSeconds}s');
+          '${delay.inSeconds}s (attempt $_reconnectAttempts)');
       isAutoConnecting = true;
       notifyListeners();
-      Future.delayed(BleConstants.reconnectDelay, () {
+      Future.delayed(delay, () {
         if (!isConnected && _savedDeviceId != null) {
           unawaited(_autoConnect(_savedDeviceId!));
         }
@@ -210,6 +215,12 @@ class BleService extends ChangeNotifier {
     }
   }
 
+Duration _backoffDelay(int attempt) {
+    final scaled = BleConstants.reconnectBaseDelay * attempt;
+    return scaled > BleConstants.reconnectMaxDelay
+        ? BleConstants.reconnectMaxDelay
+        : scaled;
+  }
   // ── Post-connect setup ─────────────────────────────────────────────────────
 
   Future<void> _setupConnectedDevice(BluetoothDevice device) async {
@@ -218,6 +229,7 @@ class BleService extends ChangeNotifier {
     isConnected = true;
     isAutoConnecting = false;
     lastError = null;
+    _reconnectAttempts = 0;
     notifyListeners();
 
     try {
@@ -251,6 +263,7 @@ class BleService extends ChangeNotifier {
           _readCharacteristic!.onValueReceived.listen(_parseStatusPacket);
       await _writeData(BleConstants.requestStatusCommand);
       _startWatchdog();
+      _startKeepalive();
       Log.i('BleService',
           'Connected and subscribed to ${device.platformName}');
     } catch (e) {
@@ -265,10 +278,12 @@ class BleService extends ChangeNotifier {
   Future<void> forgetDevice() async {
     Log.i('BleService', 'Forgetting device');
     _savedDeviceId = null;
+    _reconnectAttempts = 0;
     await _repository.clearSavedDeviceId();
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
     _stopWatchdog();
+    _stopKeepalive();
     _notifySubscription?.cancel();
     _notifySubscription = null;
     final device = connectedDevice;
@@ -422,6 +437,26 @@ class BleService extends ChangeNotifier {
     _watchdogTimer = null;
   }
 
+  // ── Keepalive ──────────────────────────────────────────────────────────
+
+  /// Proactively re-requests a status broadcast on a fixed cadence while
+  /// connected. This is a cheaper, faster recovery path than the watchdog's
+  /// forced disconnect: a missed broadcast tick from the station resolves
+  /// itself the moment this fires, without tearing down and re-establishing
+  /// the GATT connection.
+  void _startKeepalive() {
+    _keepaliveTimer?.cancel();
+    _keepaliveTimer = Timer.periodic(BleConstants.keepaliveInterval, (_) {
+      if (!isConnected) return;
+      unawaited(_writeData(BleConstants.requestStatusCommand));
+    });
+  }
+
+  void _stopKeepalive() {
+    _keepaliveTimer?.cancel();
+    _keepaliveTimer = null;
+  }
+
   /// Disconnects the (apparently stuck) device. The existing
   /// `connectionState` listener already handles the resulting
   /// `disconnected` event via `_handleDisconnect(retry: true)`, which
@@ -448,6 +483,7 @@ class BleService extends ChangeNotifier {
     _notifySubscription?.cancel();
     _connectionSubscription?.cancel();
     _watchdogTimer?.cancel();
+    _keepaliveTimer?.cancel();
     try {
       connectedDevice?.disconnect();
     } catch (_) {}
