@@ -78,4 +78,15 @@ abstract final class BleConstants {
 
   /// BLE scan duration before automatically stopping.
   static const Duration scanDuration = Duration(seconds: 60);
+
+   /// Maximum time without a status packet before the watchdog considers the
+  /// connection stale and forces a reconnect, even though the OS hasn't yet
+  /// fired a `disconnected` event. Several OEMs (Samsung, Xiaomi) are known
+  /// to leave a GATT connection in a "zombie" state — connected per the OS,
+  /// but no longer notifying — especially with `autoConnect: true` and the
+  /// screen off. This is the exact failure mode gateway mode can't tolerate.
+  static const Duration staleConnectionThreshold = Duration(seconds: 45);
+
+  /// How often the watchdog timer checks for staleness.
+  static const Duration watchdogCheckInterval = Duration(seconds: 15);
 }

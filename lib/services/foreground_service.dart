@@ -102,7 +102,7 @@ abstract final class ForegroundService {
   ///
   /// Called on every BLE status update so the user can glance at the
   /// notification shade to check battery without opening the app.
-  static Future<void> updateStatus({
+ static Future<void> updateStatus({
     required bool connected,
     PowerStationStatus? status,
   }) async {
@@ -127,10 +127,17 @@ abstract final class ForegroundService {
       text = parts.join('  ·  ');
     }
 
-    await FlutterForegroundTask.updateService(
-      notificationTitle: title,
-      notificationText: text,
-    );
+    try {
+      await FlutterForegroundTask.updateService(
+        notificationTitle: title,
+        notificationText: text,
+      );
+    } catch (e) {
+      // Never let a failed notification update propagate into the BLE
+      // status callback — this runs on every packet, and AppCoordinator
+      // still has energy logging / MQTT publish to do after this call.
+      Log.e('ForegroundService', 'updateStatus failed', e);
+    }
   }
 
   // ── Battery optimisation ────────────────────────────────────────────────
@@ -151,6 +158,7 @@ abstract final class ForegroundService {
     }
   }
 }
+
 
 // ── Task handler ──────────────────────────────────────────────────────────────
 

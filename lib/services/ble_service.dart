@@ -38,6 +38,14 @@ class BleService extends ChangeNotifier {
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
   StreamSubscription<BluetoothAdapterState>? _adapterSubscription;
 
+  Timer? _watchdogTimer;
+
+  /// Wall-clock time of the last valid packet received from the connected
+  /// device (any packet with a valid protocol header, not just full status
+  /// reports). Null while disconnected or before the first packet arrives
+  /// after a (re)connect.
+  DateTime? lastPacketTime;
+
   String? _savedDeviceId;
   BluetoothDevice? _pendingAutoConnectDevice;
   DateTime _lastManualCommandTime = DateTime.fromMillisecondsSinceEpoch(0);
@@ -182,6 +190,7 @@ class BleService extends ChangeNotifier {
     _notifySubscription?.cancel();
     _notifySubscription = null;
     isConnected = false;
+    _stopWatchdog();
     isAutoConnecting = false;
     _readCharacteristic = null;
     _writeCharacteristic = null;
@@ -241,6 +250,7 @@ class BleService extends ChangeNotifier {
       _notifySubscription =
           _readCharacteristic!.onValueReceived.listen(_parseStatusPacket);
       await _writeData(BleConstants.requestStatusCommand);
+      _startWatchdog();
       Log.i('BleService',
           'Connected and subscribed to ${device.platformName}');
     } catch (e) {
@@ -258,6 +268,7 @@ class BleService extends ChangeNotifier {
     await _repository.clearSavedDeviceId();
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    _stopWatchdog();
     _notifySubscription?.cancel();
     _notifySubscription = null;
     final device = connectedDevice;
@@ -296,6 +307,8 @@ class BleService extends ChangeNotifier {
           '0x${bytes[0].toRadixString(16)} 0x${bytes[1].toRadixString(16)}');
       return;
     }
+
+    lastPacketTime = DateTime.now();
 
     final packetType = bytes[5];
     if (packetType != BleConstants.statusPacketType) return;
@@ -378,6 +391,53 @@ class BleService extends ChangeNotifier {
     }
   }
 
+
+// ── Connection watchdog ─────────────────────────────────────────────────
+
+  /// Periodically checks that packets are still arriving. Exists because
+  /// `device.connectionState` can lag far behind reality on some OEMs —
+  /// the OS reports "connected" while the GATT link is effectively dead.
+  /// Without this, gateway mode silently goes stale with the screen off
+  /// and nothing notices until the user opens the app.
+  void _startWatchdog() {
+    _watchdogTimer?.cancel();
+    _watchdogTimer = Timer.periodic(BleConstants.watchdogCheckInterval, (_) {
+      if (!isConnected) return;
+      final last = lastPacketTime;
+      if (last == null) return; // No packet yet since (re)connect — give it time.
+
+      final staleFor = DateTime.now().difference(last);
+      if (staleFor > BleConstants.staleConnectionThreshold) {
+        Log.w('BleService',
+            'No packet in ${staleFor.inSeconds}s (threshold '
+            '${BleConstants.staleConnectionThreshold.inSeconds}s) — '
+            'connection appears stale. Forcing reconnect.');
+        unawaited(_forceReconnect());
+      }
+    });
+  }
+
+  void _stopWatchdog() {
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
+  }
+
+  /// Disconnects the (apparently stuck) device. The existing
+  /// `connectionState` listener already handles the resulting
+  /// `disconnected` event via `_handleDisconnect(retry: true)`, which
+  /// schedules a normal auto-reconnect — so this just kicks the OS into
+  /// noticing what the watchdog already knows.
+  Future<void> _forceReconnect() async {
+    final device = connectedDevice;
+    if (device == null) return;
+    try {
+      await device.disconnect();
+    } catch (e) {
+      Log.w('BleService', 'Watchdog force-disconnect failed: $e');
+    }
+  }
+
+
   // ── Dispose ────────────────────────────────────────────────────────────────
 
   @override
@@ -387,6 +447,7 @@ class BleService extends ChangeNotifier {
     _isScanningSubscription?.cancel();
     _notifySubscription?.cancel();
     _connectionSubscription?.cancel();
+    _watchdogTimer?.cancel();
     try {
       connectedDevice?.disconnect();
     } catch (_) {}
