@@ -5,6 +5,7 @@ import 'energy_log_repository.dart';
 import 'flow_repository.dart';
 import 'history_repository.dart';
 import 'mqtt_settings_repository.dart';
+import 'secure_storage_source.dart';
 import 'shared_preferences_source.dart';
 import 'tapo_repository.dart';
 
@@ -15,37 +16,23 @@ export 'energy_log_repository.dart';
 export 'flow_repository.dart';
 export 'history_repository.dart';
 export 'mqtt_settings_repository.dart';
+export 'secure_storage_source.dart';
 export 'shared_preferences_source.dart';
 export 'tapo_repository.dart';
 
 /// Composition root for all persistence repositories.
 ///
-/// ## Why a container class?
-/// Services should depend on the *narrowest* interface that satisfies their
-/// needs (e.g. [BleService] needs only [BleRepository], not everything).
-/// [AppRepositories] creates every concrete implementation once, wiring all
-/// of them to a single [SharedPreferencesSource], and exposes each through
-/// its abstract interface type.
+/// ## Sources
+/// Two storage sources are created here and shared across all repositories:
 ///
-/// [MainShell] holds the single [AppRepositories] instance and passes the
-/// relevant field to each service constructor:
+/// - [SharedPreferencesSource] — non-sensitive config (device IDs, thresholds,
+///   topic prefixes, flow lists, energy logs, history).
+/// - [SecureStorageSource] — sensitive credentials (Tapo device passwords,
+///   MQTT broker password). Backed by platform keystore on Android and by
+///   Keychain Services on iOS.
 ///
-/// ```dart
-/// final _repos = AppRepositories();
-///
-/// // In _MainShellState.initState:
-/// _ble          = BleService(_repos.ble);
-/// _history      = HistoryService(_repos.history);
-/// _energyLog    = EnergyLogService(_repos.energyLog);
-/// _tapoDevices  = TapoDeviceService(_tapo, _repos.tapo);
-/// _flowEngine   = FlowEngine(_ble, _webhooks, _tapo,
-///                            _tapoDevices, _history, _repos.flows);
-///
-/// // In _bootstrap:
-/// final settings = await _repos.automationSettings.load();
-/// final mqtt     = await _repos.mqttSettings.load();
-/// final flows    = await _repos.flows.loadFlows();
-/// ```
+/// Both sources are cheap to construct and safe to share — they hold no mutable
+/// state themselves; they merely provide access to the underlying platform APIs.
 ///
 /// ## Testing
 /// For unit tests, construct individual repositories directly and pass them
@@ -57,18 +44,23 @@ export 'tapo_repository.dart';
 /// final history = SharedPrefsHistoryRepository(source);
 /// final service = HistoryService(history);
 /// ```
+///
+/// For repositories that require [SecureStorageSource], provide a mock
+/// `FlutterSecureStorage` instance via the `SecureStorageSource` constructor
+/// once a mock is available (or inject a fake repository directly).
 final class AppRepositories {
   AppRepositories() {
     final source = SharedPreferencesSource();
+    final secure = const SecureStorageSource();
 
-    ble                = SharedPrefsBleRepository(source);
+    ble = SharedPrefsBleRepository(source);
     automationSettings = SharedPrefsAutomationSettingsRepository(source);
-    mqttSettings       = SharedPrefsMqttSettingsRepository(source);
-    flows              = SharedPrefsFlowRepository(source);
-    history            = SharedPrefsHistoryRepository(source);
-    energyLog          = SharedPrefsEnergyLogRepository(source);
-    tapo               = SharedPrefsTapoRepository(source);
-    dashboard          = SharedPrefsDashboardRepository(source);
+    mqttSettings = SharedPrefsMqttSettingsRepository(source, secure);
+    flows = SharedPrefsFlowRepository(source);
+    history = SharedPrefsHistoryRepository(source);
+    energyLog = SharedPrefsEnergyLogRepository(source);
+    tapo = SharedPrefsTapoRepository(source, secure);
+    dashboard = SharedPrefsDashboardRepository(source);
   }
 
   /// BLE device pairing — used by [BleService].
@@ -80,8 +72,7 @@ final class AppRepositories {
   /// MQTT broker configuration — used by [MainShell].
   late final MqttSettingsRepository mqttSettings;
 
-  /// Automation flow list and per-flow edge-trigger state —
-  /// used by [MainShell] (flow list) and [FlowEngine] (trigger state).
+  /// Automation flow list and per-flow edge-trigger state.
   late final FlowRepository flows;
 
   /// Automation execution log — used by [HistoryService].
@@ -93,6 +84,6 @@ final class AppRepositories {
   /// Tapo device configurations — used by [TapoDeviceService].
   late final TapoRepository tapo;
 
-  /// Dashboard widget order — used by any future dashboard service.
+  /// Dashboard widget order.
   late final DashboardRepository dashboard;
 }

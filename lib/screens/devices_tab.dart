@@ -266,8 +266,7 @@ class _RpcRefreshButtonState extends State<_RpcRefreshButton> {
         ScaffoldMessenger.of(context)
           ..clearSnackBars()
           ..showSnackBar(SnackBar(
-            content:
-                Text(resp.error ?? 'Refresh failed'),
+            content: Text(resp.error ?? 'Refresh failed'),
           ));
       }
     } finally {
@@ -281,7 +280,7 @@ class _RpcRefreshButtonState extends State<_RpcRefreshButton> {
       onPressed: _loading ? null : _refresh,
       tooltip: widget.strings.t('devices_refresh'),
       icon: _loading
-          ? SizedBox(
+          ? const SizedBox(
               width: 18,
               height: 18,
               child: CircularProgressIndicator(
@@ -320,8 +319,7 @@ class _ClientModeBanner extends StatelessWidget {
             child: Text(
               'Device list synced from gateway. '
               'Add or remove plugs on the gateway phone.',
-              style:
-                  AppTypography.labelSm.copyWith(color: AppColors.info),
+              style: AppTypography.labelSm.copyWith(color: AppColors.info),
             ),
           ),
         ],
@@ -387,8 +385,7 @@ class _DeviceCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(device.name,
-                          style: AppTypography.headingSm),
+                      Text(device.name, style: AppTypography.headingSm),
                       Text(
                         device.isOnline
                             ? (device.model.isNotEmpty
@@ -415,8 +412,7 @@ class _DeviceCard extends StatelessWidget {
                       onPressed: onDelete,
                       icon: Icon(Icons.delete_outline_rounded,
                           size: 18,
-                          color:
-                              AppColors.error.withValues(alpha: 0.7)),
+                          color: AppColors.error.withValues(alpha: 0.7)),
                     ),
                 ] else
                   // Client mode: show a REMOTE badge instead.
@@ -429,8 +425,7 @@ class _DeviceCard extends StatelessWidget {
                         color: AppColors.infoSurface,
                         borderRadius: AppRadius.xsBR,
                         border: Border.all(
-                          color:
-                              AppColors.info.withValues(alpha: 0.3),
+                          color: AppColors.info.withValues(alpha: 0.3),
                         ),
                       ),
                       child: Text(
@@ -447,6 +442,11 @@ class _DeviceCard extends StatelessWidget {
           ),
 
           // ── Toggle row ──────────────────────────────────────────────────
+          //
+          // FIX: previously used a private _ToggleCardLocal widget that was
+          // a 70-line copy-paste of ToggleCard with the Expanded wrapper
+          // removed. ToggleCard now accepts expanded: false so the parent
+          // can supply its own Expanded, eliminating the duplicate.
           Padding(
             padding: const EdgeInsets.fromLTRB(
               AppSpacing.lg,
@@ -457,7 +457,8 @@ class _DeviceCard extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: _ToggleCardLocal(
+                  child: ToggleCard(
+                    expanded: false,
                     icon: Icons.power_rounded,
                     title: strings.t('plug_power'),
                     activeLabel: strings.t('active'),
@@ -481,119 +482,7 @@ class _DeviceCard extends StatelessWidget {
   }
 }
 
-/// A non-[Expanded] version of ToggleCard for use inside [Row] + [Expanded].
-///
-/// The standard [ToggleCard] wraps itself in [Expanded], which is correct
-/// when used directly in a [Row] without an outer [Expanded]. Here we have
-/// an outer [Expanded] already, so we inline the same visual without the
-/// extra [Expanded] wrapper.
-class _ToggleCardLocal extends StatelessWidget {
-  const _ToggleCardLocal({
-    required this.icon,
-    required this.title,
-    required this.activeLabel,
-    required this.disabledLabel,
-    required this.isActive,
-    required this.activeColor,
-    required this.onTap,
-    this.enabled = true,
-  });
-
-  final IconData icon;
-  final String title;
-  final String activeLabel;
-  final String disabledLabel;
-  final bool isActive;
-  final Color activeColor;
-  final VoidCallback onTap;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(
-          vertical: AppSpacing.lg,
-          horizontal: AppSpacing.sm,
-        ),
-        decoration: BoxDecoration(
-          color: isActive
-              ? activeColor.withValues(alpha: 0.08)
-              : theme.colorScheme.surfaceContainerLow,
-          borderRadius: AppRadius.lgBR,
-          border: Border.all(
-            color:
-                isActive ? activeColor : theme.colorScheme.outline,
-            width: isActive ? 1.5 : 1,
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: isActive
-                    ? activeColor.withValues(alpha: 0.15)
-                    : theme.colorScheme.surfaceContainer,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                icon,
-                size: 20,
-                color: isActive
-                    ? activeColor
-                    : theme.colorScheme.onSurfaceVariant
-                        .withValues(alpha: 0.6),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: AppTypography.labelMd.copyWith(
-                color: isActive
-                    ? theme.colorScheme.onSurface
-                    : theme.colorScheme.onSurfaceVariant
-                        .withValues(alpha: 0.8),
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 4),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: isActive
-                    ? activeColor.withValues(alpha: 0.15)
-                    : theme.colorScheme.surfaceContainer,
-                borderRadius: AppRadius.xsBR,
-              ),
-              child: Text(
-                isActive ? activeLabel : disabledLabel,
-                style: AppTypography.labelSm.copyWith(
-                  color: isActive
-                      ? activeColor
-                      : theme.colorScheme.onSurfaceVariant
-                          .withValues(alpha: 0.6),
-                  fontSize: 9,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// ── Info card ─────────────────────────────────────────────────────────────────
 
 class _InfoCard extends StatelessWidget {
   const _InfoCard({required this.device});
@@ -782,7 +671,8 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 decoration: const InputDecoration(
                   labelText: 'Device name',
                   hintText: 'e.g. Garage Charger',
-                  prefixIcon: Icon(Icons.label_outline_rounded, size: 18),
+                  prefixIcon:
+                      Icon(Icons.label_outline_rounded, size: 18),
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
@@ -948,9 +838,7 @@ class _EmptyDevicesView extends StatelessWidget {
                 size: 48, color: AppColors.textTertiary),
             const SizedBox(height: AppSpacing.lg),
             Text(
-              isClientMode
-                  ? 'No plugs synced yet'
-                  : 'No smart plugs yet',
+              isClientMode ? 'No plugs synced yet' : 'No smart plugs yet',
               style: AppTypography.headingMd,
             ),
             const SizedBox(height: AppSpacing.sm),

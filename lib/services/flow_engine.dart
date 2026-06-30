@@ -27,8 +27,11 @@ import 'webhook_service.dart';
 /// plug is in the expected state AND the current time is inside the window.
 ///
 /// ## Concurrency
-/// Flows run independently via [unawaited]; a per-flow [_running] lock
-/// prevents the same flow from overlapping itself.
+/// Flows are dispatched with [_fireAndLog] — a thin wrapper around
+/// [unawaited] that attaches a `.catchError` handler so any uncaught
+/// exception surfaces in the log rather than silently vanishing into the
+/// Dart event loop. A per-flow [_running] lock prevents the same flow from
+/// overlapping itself.
 final class FlowEngine {
   FlowEngine(
     this._ble,
@@ -39,15 +42,15 @@ final class FlowEngine {
     this._flowRepository,
   );
 
-  final BleService         _ble;
-  final WebhookService     _webhooks;
-  final TapoService        _tapo;
-  final TapoDeviceService  _tapoDevices;
-  final HistoryService     _history;
-  final FlowRepository     _flowRepository;
+  final BleService _ble;
+  final WebhookService _webhooks;
+  final TapoService _tapo;
+  final TapoDeviceService _tapoDevices;
+  final HistoryService _history;
+  final FlowRepository _flowRepository;
 
   final Map<String, bool> _triggered = {};
-  final Map<String, bool> _running   = {};
+  final Map<String, bool> _running = {};
   bool _initialized = false;
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
@@ -69,7 +72,7 @@ final class FlowEngine {
     if (!_initialized) return;
     for (final flow in flows) {
       if (!flow.enabled) continue;
-      unawaited(_evaluateFlow(flow, settings));
+      _fireAndLog(_evaluateFlow(flow, settings), flow.name);
     }
   }
 
@@ -83,8 +86,22 @@ final class FlowEngine {
     for (final flow in flows) {
       if (!flow.enabled) continue;
       if (flow.trigger.type != FlowTriggerType.tapoPlugState) continue;
-      unawaited(_evaluateFlow(flow, settings));
+      _fireAndLog(_evaluateFlow(flow, settings), flow.name);
     }
+  }
+
+  // ── Fire-and-log helper ────────────────────────────────────────────────────
+
+  /// Dispatches [future] without awaiting it, but attaches a [catchError]
+  /// handler so any unhandled exception surfaces in the logger rather than
+  /// silently disappearing into the Dart event loop.
+  ///
+  /// This is preferable to bare [unawaited] for fire-and-forget flows because
+  /// it guarantees observability without requiring callers to await.
+  void _fireAndLog(Future<void> future, String flowName) {
+    future.catchError((Object e, StackTrace st) {
+      Log.e('FlowEngine', 'Unhandled error in flow "$flowName"', e, st);
+    });
   }
 
   Future<void> _evaluateFlow(
@@ -99,32 +116,32 @@ final class FlowEngine {
       return;
     }
 
-    bool shouldFire  = false;
+    bool shouldFire = false;
     bool shouldReset = false;
 
     switch (flow.trigger.type) {
       case FlowTriggerType.batteryFallsBelow:
         final level = _ble.status.batteryLevel;
         if (level <= 0) return;
-        shouldFire  = level <= flow.trigger.threshold && _triggered[flow.id] != true;
-        shouldReset = level >  flow.trigger.threshold;
+        shouldFire = level <= flow.trigger.threshold && _triggered[flow.id] != true;
+        shouldReset = level > flow.trigger.threshold;
 
       case FlowTriggerType.batteryRisesAbove:
         final level = _ble.status.batteryLevel;
         if (level <= 0) return;
-        shouldFire  = level >= flow.trigger.threshold && _triggered[flow.id] != true;
-        shouldReset = level <  flow.trigger.threshold;
+        shouldFire = level >= flow.trigger.threshold && _triggered[flow.id] != true;
+        shouldReset = level < flow.trigger.threshold;
 
       case FlowTriggerType.tapoPlugState:
-        final deviceId    = flow.trigger.tapoDeviceId;
-        final expectedOn  = flow.trigger.tapoExpectedOn;
+        final deviceId = flow.trigger.tapoDeviceId;
+        final expectedOn = flow.trigger.tapoExpectedOn;
         if (deviceId == null || deviceId.isEmpty || expectedOn == null) return;
 
         final device = _tapoDevices.getDevice(deviceId);
         if (device == null || !device.isOnline) return;
 
         final isInWrongState = device.isOn != expectedOn;
-        shouldFire  = isInWrongState && _triggered[flow.id] != true;
+        shouldFire = isInWrongState && _triggered[flow.id] != true;
         shouldReset = !isInWrongState;
     }
 
@@ -133,7 +150,8 @@ final class FlowEngine {
 
     await _setTriggered(flow.id, true);
     _running[flow.id] = true;
-    Log.i('FlowEngine', 'Firing "${flow.name}" (trigger: ${flow.trigger.type.name})');
+    Log.i('FlowEngine',
+        'Firing "${flow.name}" (trigger: ${flow.trigger.type.name})');
 
     try {
       final triggerLevel = _ble.status.batteryLevel;
@@ -163,19 +181,23 @@ final class FlowEngine {
 
       case FlowActionType.setBleOutlet:
         switch (action.outlet) {
-          case BleOutlet.usb: await _ble.setUsb(action.outletOn);
-          case BleOutlet.ac:  await _ble.setAc(action.outletOn);
-          case BleOutlet.dc:  await _ble.setDc(action.outletOn);
+          case BleOutlet.usb:
+            await _ble.setUsb(action.outletOn);
+          case BleOutlet.ac:
+            await _ble.setAc(action.outletOn);
+          case BleOutlet.dc:
+            await _ble.setDc(action.outletOn);
         }
-        Log.d('FlowEngine', '${action.outlet.name} → ${action.outletOn ? "ON" : "OFF"}');
+        Log.d('FlowEngine',
+            '${action.outlet.name} → ${action.outletOn ? "ON" : "OFF"}');
         await _history.addEntry(AutomationHistoryEntry(
-          timestamp:    DateTime.now(),
-          action:       HistoryAction.outletToggled,
+          timestamp: DateTime.now(),
+          action: HistoryAction.outletToggled,
           batteryLevel: triggerLevel,
-          success:      true,
-          method:       ActivationMethod.bleOutlet,
-          flowName:     flowName,
-          deviceName:   action.outlet.name.toUpperCase(),
+          success: true,
+          method: ActivationMethod.bleOutlet,
+          flowName: flowName,
+          deviceName: action.outlet.name.toUpperCase(),
         ));
 
       case FlowActionType.fireWebhook:
@@ -186,12 +208,12 @@ final class FlowEngine {
         final ok = await _webhooks.fire(action.webhookUrl);
         Log.d('FlowEngine', 'webhook ${ok ? "OK" : "FAILED"}');
         await _history.addEntry(AutomationHistoryEntry(
-          timestamp:    DateTime.now(),
-          action:       HistoryAction.webhookFired,
+          timestamp: DateTime.now(),
+          action: HistoryAction.webhookFired,
           batteryLevel: triggerLevel,
-          success:      ok,
-          method:       ActivationMethod.webhook,
-          flowName:     flowName,
+          success: ok,
+          method: ActivationMethod.webhook,
+          flowName: flowName,
         ));
 
       case FlowActionType.controlTapo:
@@ -205,35 +227,41 @@ final class FlowEngine {
     String flowName,
   ) async {
     if (action.tapoDeviceId.isEmpty) {
-      Log.w('FlowEngine',
-          'controlTapo: no device ID set on action in "$flowName" — skipping. '
-          'Open the flow editor and select a Tapo device.');
+      Log.w(
+        'FlowEngine',
+        'controlTapo: no device ID set on action in "$flowName" — skipping. '
+        'Open the flow editor and select a Tapo device.',
+      );
       return;
     }
 
     final device = _tapoDevices.getDevice(action.tapoDeviceId);
     if (device == null) {
-      Log.w('FlowEngine', 'controlTapo: device ${action.tapoDeviceId} not found');
+      Log.w('FlowEngine',
+          'controlTapo: device ${action.tapoDeviceId} not found');
       return;
     }
 
     _tapo.resetSession(ip: device.ip, email: device.email);
     final ok = await _tapo.setOn(
-      ip:       device.ip,
-      email:    device.email,
+      ip: device.ip,
+      email: device.email,
       password: device.password,
-      on:       action.tapoOn,
+      on: action.tapoOn,
     );
-    Log.i('FlowEngine',
-        'Tapo "${device.name}" ${action.tapoOn ? "ON" : "OFF"}: ${ok ? "OK" : "FAILED"}');
+    Log.i(
+      'FlowEngine',
+      'Tapo "${device.name}" ${action.tapoOn ? "ON" : "OFF"}: '
+      '${ok ? "OK" : "FAILED"}',
+    );
     await _history.addEntry(AutomationHistoryEntry(
-      timestamp:    DateTime.now(),
-      action:       action.tapoOn ? HistoryAction.tapoOn : HistoryAction.tapoOff,
+      timestamp: DateTime.now(),
+      action: action.tapoOn ? HistoryAction.tapoOn : HistoryAction.tapoOff,
       batteryLevel: triggerLevel,
-      success:      ok,
-      method:       ActivationMethod.localTapo,
-      flowName:     flowName,
-      deviceName:   device.name,
+      success: ok,
+      method: ActivationMethod.localTapo,
+      flowName: flowName,
+      deviceName: device.name,
     ));
   }
 
@@ -254,32 +282,38 @@ final class FlowEngine {
   void resetAll() {
     for (final id in _triggered.keys) {
       _triggered[id] = false;
-      unawaited(_flowRepository.setFlowTriggered(id, false));
+      _fireAndLog(
+        _flowRepository.setFlowTriggered(id, false),
+        'resetAll[$id]',
+      );
     }
   }
 
   /// Clears the triggered guard for a single flow so it can fire immediately.
-void resetTriggeredForFlow(String flowId) {
-  _triggered[flowId] = false;
-  unawaited(_flowRepository.setFlowTriggered(flowId, false));
-}
-
-Future<void> evaluateOnce(
-  AutomationFlow flow,
-  AutomationSettings settings,
-) async {
-  if (_running[flow.id] == true) return;
-  _running[flow.id] = true;
-  Log.i('FlowEngine', 'Manual trigger: "${flow.name}"');
-  try {
-    final triggerLevel = _ble.status.batteryLevel;
-    for (final action in flow.actions) {
-      await _execute(action, settings, triggerLevel, flow.name);
-    }
-  } catch (e) {
-    Log.e('FlowEngine', 'Error in manual trigger "${flow.name}"', e);
-  } finally {
-    _running[flow.id] = false;
+  void resetTriggeredForFlow(String flowId) {
+    _triggered[flowId] = false;
+    _fireAndLog(
+      _flowRepository.setFlowTriggered(flowId, false),
+      'resetTriggeredForFlow[$flowId]',
+    );
   }
-}
+
+  Future<void> evaluateOnce(
+    AutomationFlow flow,
+    AutomationSettings settings,
+  ) async {
+    if (_running[flow.id] == true) return;
+    _running[flow.id] = true;
+    Log.i('FlowEngine', 'Manual trigger: "${flow.name}"');
+    try {
+      final triggerLevel = _ble.status.batteryLevel;
+      for (final action in flow.actions) {
+        await _execute(action, settings, triggerLevel, flow.name);
+      }
+    } catch (e) {
+      Log.e('FlowEngine', 'Error in manual trigger "${flow.name}"', e);
+    } finally {
+      _running[flow.id] = false;
+    }
+  }
 }

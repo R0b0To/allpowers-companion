@@ -24,7 +24,6 @@ import 'services/tapo_device_service.dart';
 import 'services/tapo_service.dart';
 import 'services/webhook_service.dart';
 
-
 /// Owns every service and all cross-service coordination logic.
 ///
 /// [MainShell] creates one instance, listens to it as a [ChangeNotifier],
@@ -44,44 +43,52 @@ final class AppCoordinator extends ChangeNotifier {
 
   // ── Services (read by the UI) ──────────────────────────────────────────────
   final notifications = NotificationService();
-  final webhooks      = WebhookService();
-  final tapo          = TapoService();
-  final mqtt          = MqttService();
+  final webhooks = WebhookService();
+  final tapo = TapoService();
+  final mqtt = MqttService();
 
-  late final HistoryService    history;
-  late final EnergyLogService  energyLog;
-  late final BleService        ble;
+  late final HistoryService history;
+  late final EnergyLogService energyLog;
+  late final BleService ble;
   late final TapoDeviceService tapoDevices;
-  late final FlowEngine        _flowEngine;
+  late final FlowEngine _flowEngine;
 
   // ── Public state (read by MainShell to build the UI) ──────────────────────
-  AutomationSettings   settings     = const AutomationSettings();
-  MqttSettings         mqttSettings = const MqttSettings();
-  List<AutomationFlow> flows        = [];
+  AutomationSettings settings = const AutomationSettings();
+  MqttSettings mqttSettings = const MqttSettings();
+  List<AutomationFlow> flows = [];
   bool permissionsPermanentlyDenied = false;
-  bool isBootstrapped               = false;
+  bool isBootstrapped = false;
 
   // ── Private MQTT throttle state ────────────────────────────────────────────
+  //
+  // Tracks the last published values so we only push to the broker when
+  // something actually changes or 5 seconds have elapsed.
+  //
+  // FIX: all four fields are reset to null in [_onBleStateChanged] when BLE
+  // disconnects. Without this reset, _lastMqttPublishTime could hold a recent
+  // timestamp that suppresses the first real status publish after reconnect
+  // for up to 5 seconds, giving clients a stale picture of the station.
   DateTime? _lastMqttPublishTime;
-  bool?     _lastAcState;
-  bool?     _lastDcState;
-  bool?     _lastUsbState;
+  bool? _lastAcState;
+  bool? _lastDcState;
+  bool? _lastUsbState;
 
   // ── History sync guard ─────────────────────────────────────────────────────
-  int  _lastKnownHistoryCount = 0;
-  bool _applyingRemoteFlows   = false;
+  int _lastKnownHistoryCount = 0;
+  bool _applyingRemoteFlows = false;
 
   // ── Initialisation ─────────────────────────────────────────────────────────
 
   /// Must be called once, typically from a post-frame callback in
   /// [MainShell.initState].
   Future<void> init() async {
-    history     = HistoryService(_repos.history);
-    energyLog   = EnergyLogService(_repos.energyLog);
-    ble         = BleService(_repos.ble);
+    history = HistoryService(_repos.history);
+    energyLog = EnergyLogService(_repos.energyLog);
+    ble = BleService(_repos.ble);
     tapoDevices = TapoDeviceService(tapo, _repos.tapo);
-    _flowEngine = FlowEngine(ble, webhooks, tapo, tapoDevices, history,
-        _repos.flows);
+    _flowEngine =
+        FlowEngine(ble, webhooks, tapo, tapoDevices, history, _repos.flows);
 
     await notifications.init();
 
@@ -94,9 +101,9 @@ final class AppCoordinator extends ChangeNotifier {
       _repos.flows.loadFlows(),
     ]);
 
-    settings     = results[0] as AutomationSettings;
+    settings = results[0] as AutomationSettings;
     mqttSettings = results[1] as MqttSettings;
-    flows        = results[2] as List<AutomationFlow>;
+    flows = results[2] as List<AutomationFlow>;
     isBootstrapped = true;
     notifyListeners();
 
@@ -114,11 +121,11 @@ final class AppCoordinator extends ChangeNotifier {
 
     tapoDevices.addListener(_onTapoDevicesChanged);
 
-    mqtt.onCommand              = _onMqttCommand;
-    mqtt.onFlowsReceived        = _onMqttFlowsReceived;
-    mqtt.onHistoryReceived      = _onMqttHistoryReceived;
-    mqtt.onRpcRequest           = _onRpcRequest;
-    mqtt.onTapoDevicesReceived  = _onTapoDevicesReceived;
+    mqtt.onCommand = _onMqttCommand;
+    mqtt.onFlowsReceived = _onMqttFlowsReceived;
+    mqtt.onHistoryReceived = _onMqttHistoryReceived;
+    mqtt.onRpcRequest = _onRpcRequest;
+    mqtt.onTapoDevicesReceived = _onTapoDevicesReceived;
 
     await mqtt.configure(mqttSettings);
 
@@ -161,8 +168,8 @@ final class AppCoordinator extends ChangeNotifier {
     if (mqttSettings.mode == AppMode.gateway) {
       final now = DateTime.now();
       final stateChanged = _lastAcState == null ||
-          status.isAcOn  != _lastAcState  ||
-          status.isDcOn  != _lastDcState  ||
+          status.isAcOn != _lastAcState ||
+          status.isDcOn != _lastDcState ||
           status.isUsbOn != _lastUsbState;
 
       if (stateChanged ||
@@ -170,8 +177,8 @@ final class AppCoordinator extends ChangeNotifier {
           now.difference(_lastMqttPublishTime!).inSeconds >= 5) {
         mqtt.publishStatus(status, bleConnected: true);
         _lastMqttPublishTime = now;
-        _lastAcState  = status.isAcOn;
-        _lastDcState  = status.isDcOn;
+        _lastAcState = status.isAcOn;
+        _lastDcState = status.isDcOn;
         _lastUsbState = status.isUsbOn;
       }
     }
@@ -180,10 +187,21 @@ final class AppCoordinator extends ChangeNotifier {
   void _onBleStateChanged() {
     ForegroundService.updateStatus(
       connected: ble.isConnected,
-      status:    ble.isConnected ? ble.status : null,
+      status: ble.isConnected ? ble.status : null,
     );
+
     if (!ble.isConnected && mqttSettings.mode == AppMode.gateway) {
       mqtt.publishStatus(ble.status, bleConnected: false);
+
+      // FIX: reset throttle state so the first real status packet after
+      // reconnect is always published immediately. Without this reset,
+      // _lastMqttPublishTime holds a recent timestamp and the stale-state
+      // guard suppresses the first post-reconnect publish for up to 5 s,
+      // leaving MQTT clients with an outdated view of the station.
+      _lastMqttPublishTime = null;
+      _lastAcState = null;
+      _lastDcState = null;
+      _lastUsbState = null;
     }
   }
 
@@ -216,9 +234,12 @@ final class AppCoordinator extends ChangeNotifier {
     if (mqttSettings.mode != AppMode.gateway) return;
     if (!ble.isConnected) return;
     switch (outlet) {
-      case 'usb': ble.setUsb(value);
-      case 'ac':  ble.setAc(value);
-      case 'dc':  ble.setDc(value);
+      case 'usb':
+        ble.setUsb(value);
+      case 'ac':
+        ble.setAc(value);
+      case 'dc':
+        ble.setDc(value);
     }
   }
 
@@ -234,13 +255,13 @@ final class AppCoordinator extends ChangeNotifier {
     switch (method) {
       case RpcMethod.setOutlet:
         final outlet = params['outlet'] as String;
-        final value  = params['value']  as bool;
+        final value = params['value'] as bool;
         _onMqttCommand(outlet, value);
         return {'outlet': outlet, 'value': value};
 
       case RpcMethod.tapoSetOn:
         final deviceId = params['deviceId'] as String;
-        final on       = params['on']       as bool;
+        final on = params['on'] as bool;
         final ok = await tapoDevices.setDeviceOn(deviceId, on);
         _publishTapoDevices();
         return {'ok': ok};
@@ -251,16 +272,17 @@ final class AppCoordinator extends ChangeNotifier {
         return {'count': tapoDevices.devices.length};
 
       case RpcMethod.flowsReplace:
-        final raw   = params['flows'] as List<dynamic>;
+        final raw = params['flows'] as List<dynamic>;
         final updated = raw
-            .map((j) => AutomationFlow.tryFromJson(j as Map<String, dynamic>))
+            .map((j) =>
+                AutomationFlow.tryFromJson(j as Map<String, dynamic>))
             .whereType<AutomationFlow>()
             .toList();
         await _applyFlows(updated);
         return {'count': updated.length};
 
       case RpcMethod.flowSetEnabled:
-        final flowId  = params['flowId']  as String;
+        final flowId = params['flowId'] as String;
         final enabled = params['enabled'] as bool;
         final updated = flows
             .map((f) => f.id == flowId ? f.copyWith(enabled: enabled) : f)
@@ -269,14 +291,14 @@ final class AppCoordinator extends ChangeNotifier {
         return {'ok': true};
 
       case RpcMethod.flowDelete:
-        final flowId  = params['flowId'] as String;
+        final flowId = params['flowId'] as String;
         final updated = flows.where((f) => f.id != flowId).toList();
         await _applyFlows(updated);
         return {'ok': true};
 
       case RpcMethod.flowRun:
         final flowId = params['flowId'] as String;
-        final flow   = flows.firstWhere((f) => f.id == flowId);
+        final flow = flows.firstWhere((f) => f.id == flowId);
         _flowEngine.resetTriggeredForFlow(flowId);
         await _flowEngine.evaluateOnce(flow, settings);
         return {'ok': true};
@@ -305,7 +327,7 @@ final class AppCoordinator extends ChangeNotifier {
 
   Future<void> onMqttSettingsChanged(MqttSettings updated) async {
     final wasClient = mqttSettings.mode == AppMode.client;
-    final nowClient = updated.mode    == AppMode.client;
+    final nowClient = updated.mode == AppMode.client;
 
     mqttSettings = updated;
     notifyListeners();
@@ -316,7 +338,7 @@ final class AppCoordinator extends ChangeNotifier {
     if (!wasClient && nowClient) {
       await ForegroundService.stop();
     } else if (wasClient && !nowClient) {
-      tapoDevices.resumeLocalPolling(); 
+      tapoDevices.resumeLocalPolling();
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
     }
@@ -329,7 +351,7 @@ final class AppCoordinator extends ChangeNotifier {
     }
   }
 
-  // ── MQTT flow sync (called internally from MQTT callbacks) ────────────────
+  // ── MQTT flow sync ─────────────────────────────────────────────────────────
 
   Future<void> _onMqttFlowsReceived(List<AutomationFlow> incoming) async {
     if (_applyingRemoteFlows) return;
@@ -351,7 +373,7 @@ final class AppCoordinator extends ChangeNotifier {
     }
   }
 
-  // ── Flow application (shared by UI, RPC, and MQTT sync paths) ─────────────
+  // ── Flow application ───────────────────────────────────────────────────────
 
   Future<void> _applyFlows(List<AutomationFlow> updated) async {
     // Inform the engine about deleted flows so it can clean up trigger state.
@@ -377,7 +399,7 @@ final class AppCoordinator extends ChangeNotifier {
     await _repos.flows.saveFlows(updated);
   }
 
-  // ── Derived helpers used by MainShell ──────────────────────────────────────
+  // ── Derived helpers ────────────────────────────────────────────────────────
 
   /// Number of bottom-nav tabs for the current mode.
   int get tabCount => mqttSettings.mode == AppMode.client ? 4 : 5;
@@ -390,11 +412,11 @@ final class AppCoordinator extends ChangeNotifier {
     tapoDevices.removeListener(_onTapoDevicesChanged);
     ble.removeListener(_onBleStateChanged);
 
-    ble.onStatus            = null;
-    mqtt.onCommand          = null;
-    mqtt.onFlowsReceived    = null;
-    mqtt.onHistoryReceived  = null;
-    mqtt.onRpcRequest       = null;
+    ble.onStatus = null;
+    mqtt.onCommand = null;
+    mqtt.onFlowsReceived = null;
+    mqtt.onHistoryReceived = null;
+    mqtt.onRpcRequest = null;
     mqtt.onTapoDevicesReceived = null;
 
     ble.dispose();
