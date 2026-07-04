@@ -20,6 +20,21 @@ import '../utils/logger.dart';
 /// microsecond timestamp. The counter eliminates the (rare but real)
 /// collision that occurs when two calls arrive in the same microsecond on
 /// platforms where the clock doesn't advance between Dart microtasks.
+///
+/// ## Staleness on the client side
+/// Two mechanisms guard against a client getting stuck on old data:
+/// - A gateway connects with a retained Last Will and Testament on its
+///   status topic. If the gateway drops off the broker uncleanly (crash,
+///   force-quit, network loss) rather than disconnecting gracefully, the
+///   broker publishes the will on its behalf, so any client — even one
+///   that only connects later — sees `bleConnected: false` immediately
+///   instead of trusting an indefinitely stale "everything is fine"
+///   retained message.
+/// - [onConnected] fires on every successful (re)connect, including
+///   automatic reconnects. Callers use it to force a full state re-publish
+///   (status, Tapo devices, history snapshot) so a client doesn't have to
+///   wait for the next organic state change — which may never come if the
+///   station is just sitting idle — to receive current data.
 final class MqttService extends ChangeNotifier {
   MqttServerClient? _client;
   MqttSettings _settings = const MqttSettings();
@@ -49,6 +64,11 @@ final class MqttService extends ChangeNotifier {
   void Function(List<TapoDevice> devices)? onTapoDevicesReceived;
   Future<dynamic> Function(String method, Map<String, dynamic> params)?
       onRpcRequest;
+
+  /// Fires on every successful connect AND every automatic reconnect.
+  /// Use this to force a full state re-publish (gateway) or to know the
+  /// link just came back (client).
+  VoidCallback? onConnected;
 
   // ── Getters ────────────────────────────────────────────────────────────────
   PowerStationStatus get remoteStatus => _remoteStatus;
@@ -156,6 +176,32 @@ final class MqttService extends ChangeNotifier {
         connMsg.authenticateAs(_settings.username, _settings.password);
       }
 
+      // Last Will and Testament — only meaningful for the gateway, since
+      // it's the only role that publishes a status topic other phones
+      // rely on. If this phone disappears without a clean disconnect (app
+      // killed, phone dies, wifi drops mid-session), the broker publishes
+      // this retained "offline" payload on our behalf, so a client that's
+      // already connected — or one that connects hours later and reads
+      // the retained message — never mistakes silence for "still fine".
+      if (_settings.mode == AppMode.gateway) {
+        final willPayload = jsonEncode({
+          'batteryLevel': 0,
+          'inputWatts': 0,
+          'outputWatts': 0,
+          'minutesRemaining': 0,
+          'isUsbOn': false,
+          'isAcOn': false,
+          'isDcOn': false,
+          'bleConnected': false,
+          'ts': DateTime.now().toUtc().millisecondsSinceEpoch,
+        });
+        connMsg
+          ..withWillTopic(_settings.statusTopic)
+          ..withWillMessage(willPayload)
+          ..withWillQos(MqttQos.atLeastOnce)
+          ..withWillRetain();
+      }
+
       c.connectionMessage = connMsg;
       _client = c;
 
@@ -176,6 +222,7 @@ final class MqttService extends ChangeNotifier {
         _subscribe();
         notifyListeners();
         Log.i('MqttService', 'Connected [${_settings.mode.name}]');
+        onConnected?.call();
       } else {
         final code = status?.returnCode?.name ?? 'no response';
         throw StateError('Broker refused connection: $code');
@@ -229,6 +276,7 @@ final class MqttService extends ChangeNotifier {
     _subscribe();
     notifyListeners();
     Log.i('MqttService', 'Auto-reconnected — re-subscribed');
+    onConnected?.call();
   }
 
   void _onDisconnected() {
@@ -669,6 +717,7 @@ final class MqttService extends ChangeNotifier {
     onHistoryReceived = null;
     onTapoDevicesReceived = null;
     onRpcRequest = null;
+    onConnected = null;
     super.dispose();
   }
 }

@@ -517,6 +517,16 @@ class _FlowCard extends StatelessWidget {
   final ValueChanged<bool> onToggle;
   final VoidCallback onDelete;
 
+  String _deviceName(String? id) {
+    if (id == null) return 'Plug';
+    return tapoDevices.where((d) => d.id == id).firstOrNull?.name ??
+        'Unknown plug';
+  }
+
+  /// Builds the trigger summary line, e.g.:
+  /// - `Falls below 10%  ·  21:00–08:00`
+  /// - `Falls below 10%  ·  "Garage" OFF  ·  21:00–08:00` (combined condition)
+  /// - `Plug "Garage" found OFF  ·  21:00–08:00`
   String get _triggerLine {
     final t = flow.trigger;
     final String base;
@@ -527,22 +537,29 @@ class _FlowCard extends StatelessWidget {
       case FlowTriggerType.batteryRisesAbove:
         base = 'Rises above ${t.threshold}%';
       case FlowTriggerType.tapoPlugState:
-        final deviceName = t.tapoDeviceId != null
-            ? (tapoDevices
-                    .where((d) => d.id == t.tapoDeviceId)
-                    .firstOrNull
-                    ?.name ??
-                'Unknown plug')
-            : 'Plug';
+        final deviceName = _deviceName(t.tapoDeviceId);
         final stateLabel =
             t.tapoExpectedOn == true ? 'found OFF' : 'found ON';
         base = 'Plug "$deviceName" $stateLabel';
     }
 
-    if (!t.hasWindow) return base;
-    String fmt(TimeOfDay td) =>
-        '${td.hour.toString().padLeft(2, '0')}:${td.minute.toString().padLeft(2, '0')}';
-    return '$base  ·  ${fmt(t.windowStart!)}–${fmt(t.windowEnd!)}';
+    final parts = <String>[base];
+
+    // Combined battery + plug-state condition (AND). Only meaningful for
+    // battery triggers — tapoPlugState already has its own plug semantics.
+    if (t.type != FlowTriggerType.tapoPlugState && t.requirePlugState) {
+      final deviceName = _deviceName(t.tapoDeviceId);
+      final stateLabel = t.tapoExpectedOn == true ? 'OFF' : 'ON';
+      parts.add('"$deviceName" $stateLabel');
+    }
+
+    if (t.hasWindow) {
+      String fmt(TimeOfDay td) =>
+          '${td.hour.toString().padLeft(2, '0')}:${td.minute.toString().padLeft(2, '0')}';
+      parts.add('${fmt(t.windowStart!)}–${fmt(t.windowEnd!)}');
+    }
+
+    return parts.join('  ·  ');
   }
 
   (IconData, Color) get _triggerIcon => switch (flow.trigger.type) {

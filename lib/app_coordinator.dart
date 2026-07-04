@@ -78,6 +78,21 @@ final class AppCoordinator extends ChangeNotifier {
   int _lastKnownHistoryCount = 0;
   bool _applyingRemoteFlows = false;
 
+  // ── Timers ──────────────────────────────────────────────────────────────────
+  //
+  // [_flowEvalTimer] re-evaluates flows on a fixed cadence, independent of
+  // BLE packets or Tapo polls. Without this, a flow whose time window opens
+  // or closes while nothing else changes (no new BLE packet, no Tapo state
+  // change) would never be re-checked — the window guard is correct, but
+  // only actually gets *evaluated* when some other event happens to trigger
+  // `_evaluateFlow`.
+  //
+  // [_mqttHeartbeatTimer] keeps the gateway's retained status message fresh
+  // during long idle periods so a client that reconnects hours later sees a
+  // recent timestamp rather than one that merely looks stale from inactivity.
+  Timer? _flowEvalTimer;
+  Timer? _mqttHeartbeatTimer;
+
   // ── Initialisation ─────────────────────────────────────────────────────────
 
   /// Must be called once, typically from a post-frame callback in
@@ -115,17 +130,28 @@ final class AppCoordinator extends ChangeNotifier {
     history.addListener(_onHistoryChanged);
 
     await energyLog.init();
+
+    // FIX: the listener must be attached *before* tapoDevices.init() kicks
+    // off its first poll. init() starts an unawaited poll cycle immediately;
+    // previously the listener was attached *after* init()/flowEngine.init()/
+    // ble.init() (the latter can block for several seconds during BLE
+    // auto-connect), so the very first Tapo poll — offline → online, first
+    // real on/off state — routinely completed and called notifyListeners()
+    // before anything was listening. In gateway mode that meant the first
+    // real plug state never reached MQTT, and any flow gated on that plug's
+    // initial state never got evaluated either.
+    tapoDevices.addListener(_onTapoDevicesChanged);
     await tapoDevices.init();
+
     await _flowEngine.init(flows);
     await ble.init();
-
-    tapoDevices.addListener(_onTapoDevicesChanged);
 
     mqtt.onCommand = _onMqttCommand;
     mqtt.onFlowsReceived = _onMqttFlowsReceived;
     mqtt.onHistoryReceived = _onMqttHistoryReceived;
     mqtt.onRpcRequest = _onRpcRequest;
     mqtt.onTapoDevicesReceived = _onTapoDevicesReceived;
+    mqtt.onConnected = _onMqttConnected;
 
     await mqtt.configure(mqttSettings);
 
@@ -133,6 +159,18 @@ final class AppCoordinator extends ChangeNotifier {
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();
     }
+
+    _flowEvalTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mqttSettings.mode != AppMode.client) {
+        _flowEngine.evaluate(flows, settings);
+      }
+    });
+
+    _mqttHeartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mqttSettings.mode == AppMode.gateway && mqtt.isConnected) {
+        mqtt.publishStatus(ble.status, bleConnected: ble.isConnected);
+      }
+    });
   }
 
   // ── Permissions ────────────────────────────────────────────────────────────
@@ -246,6 +284,31 @@ final class AppCoordinator extends ChangeNotifier {
   void _onTapoDevicesReceived(List<TapoDevice> devices) {
     if (mqttSettings.mode != AppMode.client) return;
     tapoDevices.replaceAll(devices);
+  }
+
+  /// Called by [MqttService] the instant a (re)connection succeeds — the
+  /// initial connect and every automatic reconnect alike.
+  ///
+  /// On the gateway, this forces a full state re-publish: status, Tapo
+  /// devices, and a full history snapshot. This is what actually fixes a
+  /// client "stuck on an old state that a restart doesn't clear" — that
+  /// symptom means the client is reading a stale *retained* broker message,
+  /// which a client-side restart can never fix by itself since the client
+  /// has no state of its own to discard; only a fresh publish from the
+  /// gateway can replace what the broker is holding. Previously the gateway
+  /// only republished when something happened to change, so a broker
+  /// restart (which can wipe retained messages) or a flaky reconnect could
+  /// leave clients with nothing current until the station's state next
+  /// happened to change on its own.
+  void _onMqttConnected() {
+    if (mqttSettings.mode != AppMode.gateway) return;
+    _lastMqttPublishTime = null;
+    _lastAcState = null;
+    _lastDcState = null;
+    _lastUsbState = null;
+    mqtt.publishStatus(ble.status, bleConnected: ble.isConnected);
+    _publishTapoDevices();
+    mqtt.publishHistorySnapshot(history.entries);
   }
 
   Future<dynamic> _onRpcRequest(
@@ -408,6 +471,9 @@ final class AppCoordinator extends ChangeNotifier {
 
   @override
   void dispose() {
+    _flowEvalTimer?.cancel();
+    _mqttHeartbeatTimer?.cancel();
+
     history.removeListener(_onHistoryChanged);
     tapoDevices.removeListener(_onTapoDevicesChanged);
     ble.removeListener(_onBleStateChanged);
@@ -418,6 +484,7 @@ final class AppCoordinator extends ChangeNotifier {
     mqtt.onHistoryReceived = null;
     mqtt.onRpcRequest = null;
     mqtt.onTapoDevicesReceived = null;
+    mqtt.onConnected = null;
 
     ble.dispose();
     history.dispose();

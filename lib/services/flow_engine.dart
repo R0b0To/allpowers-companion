@@ -26,6 +26,12 @@ import 'webhook_service.dart';
 /// For [FlowTriggerType.tapoPlugState] the engine checks whether the named
 /// plug is in the expected state AND the current time is inside the window.
 ///
+/// ## Combined battery + plug condition
+/// A battery trigger (`batteryFallsBelow` / `batteryRisesAbove`) can also
+/// require a named plug to be in a specific state via
+/// [FlowTrigger.requirePlugState] — e.g. "battery below 10% AND plug is
+/// off". See [_plugConditionSatisfied].
+///
 /// ## Concurrency
 /// Flows are dispatched with [_fireAndLog] — a thin wrapper around
 /// [unawaited] that attaches a `.catchError` handler so any uncaught
@@ -63,7 +69,7 @@ final class FlowEngine {
     Log.i('FlowEngine', 'init — ${flows.length} flow(s) loaded');
   }
 
-  // ── Evaluation (called on BLE status update) ───────────────────────────────
+  // ── Evaluation (called on BLE status update, and periodically) ─────────────
 
   Future<void> evaluate(
     List<AutomationFlow> flows,
@@ -76,7 +82,9 @@ final class FlowEngine {
     }
   }
 
-  /// Evaluates Tapo-plug-state triggers. Called by [TapoDeviceService]
+  /// Evaluates flows whose trigger depends on Tapo plug state — either a
+  /// pure [FlowTriggerType.tapoPlugState] trigger, or a battery trigger with
+  /// [FlowTrigger.requirePlugState] set. Called by [TapoDeviceService]
   /// after every poll cycle so plug-state changes are detected promptly.
   Future<void> evaluateTapoTriggers(
     List<AutomationFlow> flows,
@@ -85,7 +93,9 @@ final class FlowEngine {
     if (!_initialized) return;
     for (final flow in flows) {
       if (!flow.enabled) continue;
-      if (flow.trigger.type != FlowTriggerType.tapoPlugState) continue;
+      final dependsOnTapo = flow.trigger.type == FlowTriggerType.tapoPlugState ||
+          flow.trigger.requirePlugState;
+      if (!dependsOnTapo) continue;
       _fireAndLog(_evaluateFlow(flow, settings), flow.name);
     }
   }
@@ -123,14 +133,27 @@ final class FlowEngine {
       case FlowTriggerType.batteryFallsBelow:
         final level = _ble.status.batteryLevel;
         if (level <= 0) return;
-        shouldFire = level <= flow.trigger.threshold && _triggered[flow.id] != true;
-        shouldReset = level > flow.trigger.threshold;
+        final belowThreshold = level <= flow.trigger.threshold;
+        final plugOk = _plugConditionSatisfied(flow.trigger);
+        // null = device offline right now — skip this cycle rather than
+        // guess; we'll re-check next time the poll or timer fires.
+        if (plugOk == null) return;
+        shouldFire =
+            belowThreshold && plugOk && _triggered[flow.id] != true;
+        // Reset as soon as the battery condition alone clears, independent
+        // of plug state, so the guard doesn't get stuck armed forever if
+        // the plug condition happens to be the thing keeping it from firing.
+        shouldReset = !belowThreshold;
 
       case FlowTriggerType.batteryRisesAbove:
         final level = _ble.status.batteryLevel;
         if (level <= 0) return;
-        shouldFire = level >= flow.trigger.threshold && _triggered[flow.id] != true;
-        shouldReset = level < flow.trigger.threshold;
+        final aboveThreshold = level >= flow.trigger.threshold;
+        final plugOk = _plugConditionSatisfied(flow.trigger);
+        if (plugOk == null) return;
+        shouldFire =
+            aboveThreshold && plugOk && _triggered[flow.id] != true;
+        shouldReset = !aboveThreshold;
 
       case FlowTriggerType.tapoPlugState:
         final deviceId = flow.trigger.tapoDeviceId;
@@ -164,6 +187,31 @@ final class FlowEngine {
     } finally {
       _running[flow.id] = false;
     }
+  }
+
+  /// Evaluates [FlowTrigger.requirePlugState] for battery triggers.
+  ///
+  /// Returns:
+  /// - `true`  — condition satisfied, or not required at all.
+  /// - `false` — misconfigured (no device / no expected state selected).
+  ///   Fails closed so a half-configured flow never fires unexpectedly.
+  /// - `null`  — the device exists but is currently offline/unpollable.
+  ///   Callers should skip this evaluation cycle rather than treat this as
+  ///   a definite pass or fail, since the real state is simply unknown
+  ///   right now.
+  bool? _plugConditionSatisfied(FlowTrigger trigger) {
+    if (!trigger.requirePlugState) return true;
+
+    final deviceId = trigger.tapoDeviceId;
+    final requiredOn = trigger.tapoExpectedOn;
+    if (deviceId == null || deviceId.isEmpty || requiredOn == null) {
+      return false;
+    }
+
+    final device = _tapoDevices.getDevice(deviceId);
+    if (device == null || !device.isOnline) return null;
+
+    return device.isOn == requiredOn;
   }
 
   // ── Action execution ───────────────────────────────────────────────────────

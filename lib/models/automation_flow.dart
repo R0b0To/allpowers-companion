@@ -14,6 +14,7 @@ final class FlowTrigger {
     this.windowEnd,
     this.tapoDeviceId,
     this.tapoExpectedOn,
+    this.requirePlugState = false,
   });
 
   final FlowTriggerType type;
@@ -25,10 +26,21 @@ final class FlowTrigger {
   final TimeOfDay? windowEnd;
 
   /// Used for [FlowTriggerType.tapoPlugState] — the device to watch.
+  /// Also reused as the target device when [requirePlugState] is set on a
+  /// battery trigger.
   final String? tapoDeviceId;
 
   /// Used for [FlowTriggerType.tapoPlugState] — fire when plug is this state.
+  /// Also reused as the required state when [requirePlugState] is set on a
+  /// battery trigger.
   final bool? tapoExpectedOn;
+
+  /// When `true` and [type] is a battery trigger (`batteryFallsBelow` /
+  /// `batteryRisesAbove`), the plug named by [tapoDeviceId] must be in the
+  /// state given by [tapoExpectedOn] for the trigger to fire — e.g.
+  /// "battery below 10% AND plug is off". Ignored for [tapoPlugState],
+  /// which already has its own plug-state semantics.
+  final bool requirePlugState;
 
   bool get hasWindow => windowStart != null && windowEnd != null;
 
@@ -47,6 +59,7 @@ final class FlowTrigger {
     Object? windowEnd = _kSentinel,
     Object? tapoDeviceId = _kSentinel,
     Object? tapoExpectedOn = _kSentinel,
+    bool? requirePlugState,
   }) =>
       FlowTrigger(
         type: type ?? this.type,
@@ -63,6 +76,7 @@ final class FlowTrigger {
         tapoExpectedOn: identical(tapoExpectedOn, _kSentinel)
             ? this.tapoExpectedOn
             : tapoExpectedOn as bool?,
+        requirePlugState: requirePlugState ?? this.requirePlugState,
       );
 
   Map<String, dynamic> toJson() => {
@@ -72,6 +86,7 @@ final class FlowTrigger {
         if (windowEnd != null) 'windowEnd': _fmtTime(windowEnd!),
         if (tapoDeviceId != null) 'tapoDeviceId': tapoDeviceId,
         if (tapoExpectedOn != null) 'tapoExpectedOn': tapoExpectedOn,
+        'requirePlugState': requirePlugState,
       };
 
   static FlowTrigger fromJson(Map<String, dynamic> j) => FlowTrigger(
@@ -87,6 +102,7 @@ final class FlowTrigger {
             : null,
         tapoDeviceId: j['tapoDeviceId'] as String?,
         tapoExpectedOn: j['tapoExpectedOn'] as bool?,
+        requirePlugState: j['requirePlugState'] as bool? ?? false,
       );
 
   static String _fmtTime(TimeOfDay t) =>

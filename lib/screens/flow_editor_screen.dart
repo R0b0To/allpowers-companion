@@ -247,8 +247,25 @@ class _TriggerCard extends StatelessWidget {
                 icon: Icons.power_rounded,
                 selected: isTapo,
                 color: AppColors.warning,
-                onTap: () => onChanged(trigger.copyWith(
-                    type: FlowTriggerType.tapoPlugState)),
+                // FIX: previously this only set `type`, leaving windowStart/
+                // windowEnd null. The UI below shows fallback placeholder
+                // times (8:00/22:00) for this trigger type, which made it
+                // *look* like a window was active and required, but
+                // `hasWindow` stayed false and `isTimeInWindow` treats "no
+                // window" as "always active" — so newly created Plug State
+                // triggers fired at any hour until the user happened to tap
+                // both time tiles. Populate a real default window here so
+                // what's shown always matches what's actually enforced.
+                onTap: () {
+                  final next =
+                      trigger.copyWith(type: FlowTriggerType.tapoPlugState);
+                  onChanged(next.hasWindow
+                      ? next
+                      : next.copyWith(
+                          windowStart: const TimeOfDay(hour: 21, minute: 0),
+                          windowEnd: const TimeOfDay(hour: 8, minute: 0),
+                        ));
+                },
               ),
             ],
           ),
@@ -286,6 +303,116 @@ class _TriggerCard extends StatelessWidget {
                   onChanged(trigger.copyWith(threshold: v.round())),
             ),
             const SizedBox(height: AppSpacing.md),
+            const Divider(height: 1),
+            const SizedBox(height: AppSpacing.md),
+
+            // ── Combined plug-state condition (AND) ───────────────────────
+            Row(
+              children: [
+                Icon(Icons.power_rounded,
+                    size: 16,
+                    color:
+                        theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text('Also require plug state',
+                      style: AppTypography.bodyMd),
+                ),
+                Switch(
+                  value: trigger.requirePlugState,
+                  onChanged: (v) => onChanged(v
+                      ? trigger.copyWith(
+                          requirePlugState: true,
+                          tapoExpectedOn: trigger.tapoExpectedOn ?? false,
+                        )
+                      : trigger.copyWith(requirePlugState: false)),
+                ),
+              ],
+            ),
+            if (trigger.requirePlugState) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Padding(
+                padding: const EdgeInsets.only(left: 4, bottom: AppSpacing.sm),
+                child: Text(
+                  'e.g. battery below ${trigger.threshold}% AND plug is '
+                  '${trigger.tapoExpectedOn == false ? 'ON' : 'OFF'}',
+                  style: AppTypography.labelSm,
+                ),
+              ),
+              if (tapoDevices.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: AppColors.warningSurface,
+                    borderRadius: AppRadius.mdBR,
+                    border: Border.all(
+                        color: AppColors.warning.withValues(alpha:0.3)),
+                  ),
+                  child: Text(
+                    'No Tapo devices found. Add one in the Devices tab.',
+                    style: AppTypography.bodySm
+                        .copyWith(color: AppColors.warning),
+                  ),
+                )
+              else
+                DropdownButtonFormField<String>(
+                  value: trigger.tapoDeviceId?.isNotEmpty == true
+                      ? (tapoDevices.any((d) => d.id == trigger.tapoDeviceId)
+                          ? trigger.tapoDeviceId
+                          : null)
+                      : null,
+                  hint: Text('Select plug', style: AppTypography.bodyMd),
+                  decoration: InputDecoration(
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
+                    border: OutlineInputBorder(
+                        borderRadius: AppRadius.mdBR,
+                        borderSide:
+                            BorderSide(color: theme.colorScheme.outline)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: AppRadius.mdBR,
+                        borderSide:
+                            BorderSide(color: theme.colorScheme.outline)),
+                  ),
+                  items: tapoDevices
+                      .map((d) => DropdownMenuItem(
+                            value: d.id,
+                            child: Text(d.name, style: AppTypography.bodyLg),
+                          ))
+                      .toList(),
+                  onChanged: (id) =>
+                      onChanged(trigger.copyWith(tapoDeviceId: id)),
+                  dropdownColor: AppColors.surfaceElevated,
+                ),
+              const SizedBox(height: AppSpacing.md),
+              Row(
+                children: [
+                  Icon(Icons.electric_bolt_rounded,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant
+                          .withValues(alpha:0.6)),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text('Plug must be', style: AppTypography.bodyMd),
+                  const Spacer(),
+                  _SmallChip(
+                    label: 'ON',
+                    selected: trigger.tapoExpectedOn == false,
+                    color: AppColors.success,
+                    onTap: () =>
+                        onChanged(trigger.copyWith(tapoExpectedOn: false)),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  _SmallChip(
+                    label: 'OFF',
+                    selected: trigger.tapoExpectedOn == true,
+                    color: theme.colorScheme.error,
+                    onTap: () =>
+                        onChanged(trigger.copyWith(tapoExpectedOn: true)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.md),
+            ],
             const Divider(height: 1),
             const SizedBox(height: AppSpacing.md),
           ],
