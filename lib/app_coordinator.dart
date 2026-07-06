@@ -162,7 +162,7 @@ final class AppCoordinator extends ChangeNotifier {
 
     _flowEvalTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mqttSettings.mode != AppMode.client) {
-        _flowEngine.evaluate(flows, settings);
+        _flowEngine.evaluate(flows);
       }
     });
 
@@ -197,7 +197,7 @@ final class AppCoordinator extends ChangeNotifier {
     notifications.handleBatteryLevel(status.batteryLevel);
 
     if (mqttSettings.mode != AppMode.client) {
-      _flowEngine.evaluate(flows, settings);
+      _flowEngine.evaluate(flows);
     }
 
     energyLog.recordSample(status);
@@ -259,7 +259,7 @@ final class AppCoordinator extends ChangeNotifier {
 
   void _onTapoDevicesChanged() {
     if (mqttSettings.mode != AppMode.client) {
-      _flowEngine.evaluateTapoTriggers(flows, settings);
+      _flowEngine.evaluateTapoTriggers(flows);
     }
     if (mqttSettings.mode == AppMode.gateway) {
       _publishTapoDevices();
@@ -363,7 +363,7 @@ final class AppCoordinator extends ChangeNotifier {
         final flowId = params['flowId'] as String;
         final flow = flows.firstWhere((f) => f.id == flowId);
         _flowEngine.resetTriggeredForFlow(flowId);
-        await _flowEngine.evaluateOnce(flow, settings);
+        await _flowEngine.evaluateOnce(flow);
         return {'ok': true};
 
       case RpcMethod.historyClear:

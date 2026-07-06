@@ -36,13 +36,13 @@ class HistoryEntryTile extends StatelessWidget {
       };
 
   String _actionLabel(BuildContext context) => switch (entry.action) {
-        HistoryAction.tapoOn => 'Tapo turned ON',
-        HistoryAction.tapoOff => 'Tapo turned OFF',
+        HistoryAction.tapoOn => strings.t('history_tapo_on'),
+        HistoryAction.tapoOff => strings.t('history_tapo_off'),
         HistoryAction.turnOn => strings.t('history_action_on'),
         HistoryAction.turnOff => strings.t('history_action_off'),
-        HistoryAction.webhookFired => 'Webhook fired',
+        HistoryAction.webhookFired => strings.t('history_webhook_fired'),
         HistoryAction.outletToggled =>
-          'Outlet ${entry.deviceName} toggled',
+          strings.t('history_outlet_toggled', {'name': entry.deviceName}),
       };
 
   IconData get _methodIcon => switch (entry.method) {
@@ -55,7 +55,7 @@ class HistoryEntryTile extends StatelessWidget {
   String _methodLabel(BuildContext context) => switch (entry.method) {
         ActivationMethod.localTapo => strings.t('history_method_local_tapo'),
         ActivationMethod.webhook => strings.t('history_method_webhook'),
-        ActivationMethod.bleOutlet => 'BLE outlet',
+        ActivationMethod.bleOutlet => strings.t('history_method_ble_outlet'),
         ActivationMethod.none => strings.t('history_method_none'),
       };
 

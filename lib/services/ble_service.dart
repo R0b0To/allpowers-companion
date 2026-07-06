@@ -7,6 +7,7 @@ import '../constants/ble_constants.dart';
 import '../models/power_station_status.dart';
 import '../repositories/ble_repository.dart';
 import '../utils/logger.dart';
+import 'status_packet_parser.dart';
 
 /// Owns the entire Bluetooth connection lifecycle: scanning, connecting,
 /// reconnecting to a previously paired station, decoding status packets,
@@ -307,61 +308,41 @@ Duration _backoffDelay(int attempt) {
 
   // ── Packet parsing ─────────────────────────────────────────────────────────
 
+  /// Decodes an incoming notification and applies it to [status].
+  ///
+  /// The actual byte-level decoding and merge-with-current-status logic
+  /// live in [StatusPacketParser] — a pure, unit-testable module — so this
+  /// method only owns what's genuinely stateful: recording
+  /// [lastPacketTime], reading [_inManualOverrideWindow], and deciding
+  /// whether to call [notifyListeners]/[onStatus].
   void _parseStatusPacket(List<int> bytes) {
-    // Minimum length check before anything else.
-    if (bytes.length < BleConstants.minStatusPacketLength) return;
+    final result = StatusPacketParser.decode(bytes);
 
-    // FIX: validate the protocol header bytes at offsets 0 and 1 FIRST.
-    // Previously only bytes[5] (packet type) was checked. A spurious BLE
-    // notification from another characteristic — or any 16+ byte payload that
-    // happens to have 0x08 at offset 5 — would silently corrupt the displayed
-    // station state. Checking the two-byte magic header prevents this.
-    if (bytes[0] != BleConstants.header1 || bytes[1] != BleConstants.header2) {
-      Log.d('BleService',
-          'Ignoring packet with unknown header: '
-          '0x${bytes[0].toRadixString(16)} 0x${bytes[1].toRadixString(16)}');
-      return;
-    }
+    switch (result) {
+      case PacketTooShort():
+        return;
 
-    lastPacketTime = DateTime.now();
+      case UnknownHeader(:final byte0, :final byte1):
+        Log.d('BleService',
+            'Ignoring packet with unknown header: '
+            '0x${byte0.toRadixString(16)} 0x${byte1.toRadixString(16)}');
+        return;
 
-    final packetType = bytes[5];
-    if (packetType != BleConstants.statusPacketType) return;
+      case UnrecognizedPacketType():
+        lastPacketTime = DateTime.now();
 
-    final batteryLevel = bytes[BleConstants.batteryLevelOffset];
-    final inputWatts = (bytes[BleConstants.inputWattsHighByteOffset] << 8) |
-        bytes[BleConstants.inputWattsHighByteOffset + 1];
-    final outputWatts = (bytes[BleConstants.outputWattsHighByteOffset] << 8) |
-        bytes[BleConstants.outputWattsHighByteOffset + 1];
-    final minutesRemaining =
-        (bytes[BleConstants.minutesRemainingHighByteOffset] << 8) |
-            bytes[BleConstants.minutesRemainingHighByteOffset + 1];
-
-    final PowerStationStatus newStatus;
-    if (_inManualOverrideWindow) {
-      newStatus = status.copyWith(
-        batteryLevel: batteryLevel,
-        inputWatts: inputWatts,
-        outputWatts: outputWatts,
-        minutesRemaining: minutesRemaining,
-      );
-    } else {
-      final socketMask = bytes[BleConstants.socketMaskOffset];
-      newStatus = status.copyWith(
-        batteryLevel: batteryLevel,
-        inputWatts: inputWatts,
-        outputWatts: outputWatts,
-        minutesRemaining: minutesRemaining,
-        isUsbOn: (socketMask & BleConstants.usbMask) != 0,
-        isAcOn: (socketMask & BleConstants.acMask) != 0,
-        isDcOn: (socketMask & BleConstants.dcMask) != 0,
-      );
-    }
-
-    if (newStatus != status) {
-      status = newStatus;
-      notifyListeners();
-      onStatus?.call(status);
+      case StatusPacket packet:
+        lastPacketTime = DateTime.now();
+        final newStatus = StatusPacketParser.applyToStatus(
+          current: status,
+          packet: packet,
+          suppressSocketState: _inManualOverrideWindow,
+        );
+        if (newStatus != status) {
+          status = newStatus;
+          notifyListeners();
+          onStatus?.call(status);
+        }
     }
   }
 

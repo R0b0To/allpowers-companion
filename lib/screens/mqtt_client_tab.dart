@@ -5,8 +5,9 @@ import '../l10n/app_strings.dart';
 import '../models/power_station_status.dart';
 import '../services/mqtt_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/metric_card.dart';
-import '../widgets/toggle_card.dart';
+import '../widgets/outlet_controls_row.dart';
+import '../widgets/station_battery_ring.dart';
+import '../widgets/station_metrics_row.dart';
 
 /// Control screen shown when the app is running in [AppMode.client].
 ///
@@ -278,9 +279,12 @@ class _RemoteStationView extends StatelessWidget {
             delegate: SliverChildListDelegate([
               _RemoteHeader(mqtt: mqtt, strings: strings),
               const SizedBox(height: AppSpacing.xxl),
-              _RemoteBatteryRing(status: status),
+              StationBatteryRing(
+                status: status,
+                semanticsLabelPrefix: 'Remote battery level',
+              ),
               const SizedBox(height: AppSpacing.xxl),
-              _RemoteMetricsRow(status: status, strings: strings),
+              StationMetricsRow(status: status, strings: strings),
               const SizedBox(height: AppSpacing.xl),
               _RemoteOutletSection(
                 mqtt: mqtt,
@@ -358,125 +362,6 @@ class _RemoteHeader extends StatelessWidget {
             _formatLastUpdate(),
             style: AppTypography.labelSm,
           ),
-      ],
-    );
-  }
-}
-
-// ── Battery ring ──────────────────────────────────────────────────────────────
-
-class _RemoteBatteryRing extends StatelessWidget {
-  const _RemoteBatteryRing({required this.status});
-  final PowerStationStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final level = status.batteryLevel;
-    final color = AppColors.batteryColor(level);
-    final remaining = status.formattedRemainingTime;
-
-    return Semantics(
-      label: 'Remote battery level: $level percent',
-      child: Center(
-        child: SizedBox(
-          width: 160,
-          height: 160,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox.expand(
-                child: CircularProgressIndicator(
-                  value: 1,
-                  strokeWidth: 12,
-                  color: theme.colorScheme.surfaceContainer,
-                ),
-              ),
-              SizedBox.expand(
-                child: CircularProgressIndicator(
-                  value: level / 100,
-                  strokeWidth: 12,
-                  strokeCap: StrokeCap.round,
-                  backgroundColor: Colors.transparent,
-                  valueColor: AlwaysStoppedAnimation<Color>(color),
-                ),
-              ),
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '$level%',
-                    style: AppTypography.monoLg.copyWith(color: color),
-                  ),
-                  if (status.isCharging) ...[
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.bolt_rounded,
-                          size: 12,
-                          color: AppColors.success,
-                        ),
-                        Text(
-                          'Charging',
-                          style: AppTypography.labelSm.copyWith(
-                            color: AppColors.success,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                  if (remaining != null) ...[
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      status.isCharging
-                          ? '$remaining to full'
-                          : '$remaining left',
-                      style: AppTypography.labelSm.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant
-                            .withValues(alpha: 0.6),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Metrics ───────────────────────────────────────────────────────────────────
-
-class _RemoteMetricsRow extends StatelessWidget {
-  const _RemoteMetricsRow(
-      {required this.status, required this.strings});
-  final PowerStationStatus status;
-  final AppStrings strings;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: MetricCard(
-            icon: Icons.arrow_downward_rounded,
-            iconColor: AppColors.success,
-            title: strings.t('charging'),
-            value: '${status.inputWatts} W',
-          ),
-        ),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(
-          child: MetricCard(
-            icon: Icons.arrow_upward_rounded,
-            iconColor: AppColors.error,
-            title: strings.t('discharging'),
-            value: '${status.outputWatts} W',
-          ),
-        ),
       ],
     );
   }
@@ -578,53 +463,17 @@ class _RemoteOutletSectionState extends State<_RemoteOutletSection> {
           ),
         ),
         const SizedBox(height: AppSpacing.md),
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ToggleCard(
-                icon: Icons.usb_rounded,
-                title: strings.t('usb'),
-                activeLabel: strings.t('active'),
-                disabledLabel: strings.t('disabled'),
-                isActive: usbOn,
-                activeColor: AppColors.usb,
-                onTap: () => _toggle(
-                  'usb',
-                  status.isUsbOn,
-                  (v) => _usbPending = v,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              ToggleCard(
-                icon: Icons.power_rounded,
-                title: strings.t('ac'),
-                activeLabel: strings.t('active'),
-                disabledLabel: strings.t('disabled'),
-                isActive: acOn,
-                activeColor: AppColors.ac,
-                onTap: () => _toggle(
-                  'ac',
-                  status.isAcOn,
-                  (v) => _acPending = v,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              ToggleCard(
-                icon: Icons.cable_rounded,
-                title: strings.t('dc'),
-                activeLabel: strings.t('active'),
-                disabledLabel: strings.t('disabled'),
-                isActive: dcOn,
-                activeColor: AppColors.dc,
-                onTap: () => _toggle(
-                  'dc',
-                  status.isDcOn,
-                  (v) => _dcPending = v,
-                ),
-              ),
-            ],
-          ),
+        OutletControlsRow(
+          strings: strings,
+          isUsbOn: usbOn,
+          isAcOn: acOn,
+          isDcOn: dcOn,
+          onToggleUsb: () =>
+              _toggle('usb', status.isUsbOn, (v) => _usbPending = v),
+          onToggleAc: () =>
+              _toggle('ac', status.isAcOn, (v) => _acPending = v),
+          onToggleDc: () =>
+              _toggle('dc', status.isDcOn, (v) => _dcPending = v),
         ),
       ],
     );

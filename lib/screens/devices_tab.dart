@@ -99,8 +99,7 @@ class DevicesTab extends StatelessWidget {
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   _isClientMode
-                      ? 'Plug state synced from the gateway. '
-                          'Toggle plugs remotely via the gateway.'
+                      ? strings.t('devices_client_description')
                       : strings.t('devices_description'),
                   style: AppTypography.bodyMd,
                 ),
@@ -173,7 +172,8 @@ class DevicesTab extends StatelessWidget {
           ..clearSnackBars()
           ..showSnackBar(SnackBar(
             content: Text(
-              resp.error ?? 'Failed to toggle ${device.name}',
+              resp.error ??
+                  strings.t('devices_toggle_failed', {'name': device.name}),
             ),
           ));
       }
@@ -209,12 +209,11 @@ class DevicesTab extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(
-          'Remove "${device.name}"?',
+          strings.t('devices_remove_title', {'name': device.name}),
           style: AppTypography.headingMd,
         ),
         content: Text(
-          'This device will be removed from your list. Any automations '
-          'referencing it will no longer work.',
+          strings.t('devices_remove_body'),
           style: AppTypography.bodyMd,
         ),
         actions: [
@@ -229,7 +228,7 @@ class DevicesTab extends StatelessWidget {
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
             child: Text(
-              'Remove',
+              strings.t('remove'),
               style: AppTypography.headingSm
                   .copyWith(color: AppColors.error),
             ),
@@ -266,7 +265,8 @@ class _RpcRefreshButtonState extends State<_RpcRefreshButton> {
         ScaffoldMessenger.of(context)
           ..clearSnackBars()
           ..showSnackBar(SnackBar(
-            content: Text(resp.error ?? 'Refresh failed'),
+            content: Text(
+                resp.error ?? widget.strings.t('devices_refresh_failed')),
           ));
       }
     } finally {
@@ -317,8 +317,7 @@ class _ClientModeBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              'Device list synced from gateway. '
-              'Add or remove plugs on the gateway phone.',
+              strings.t('devices_client_banner'),
               style: AppTypography.labelSm.copyWith(color: AppColors.info),
             ),
           ),
@@ -429,7 +428,7 @@ class _DeviceCard extends StatelessWidget {
                         ),
                       ),
                       child: Text(
-                        'REMOTE',
+                        strings.t('mqtt_remote_label'),
                         style: AppTypography.labelSm.copyWith(
                           color: AppColors.info,
                           fontSize: 9,
@@ -471,7 +470,7 @@ class _DeviceCard extends StatelessWidget {
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
-                  child: _InfoCard(device: device),
+                  child: _InfoCard(device: device, strings: strings),
                 ),
               ],
             ),
@@ -485,8 +484,9 @@ class _DeviceCard extends StatelessWidget {
 // ── Info card ─────────────────────────────────────────────────────────────────
 
 class _InfoCard extends StatelessWidget {
-  const _InfoCard({required this.device});
+  const _InfoCard({required this.device, required this.strings});
   final TapoDevice device;
+  final AppStrings strings;
 
   @override
   Widget build(BuildContext context) {
@@ -518,7 +518,7 @@ class _InfoCard extends StatelessWidget {
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: Text('Network',
+                child: Text(strings.t('network_label'),
                     style: AppTypography.labelMd,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -635,6 +635,7 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final s = widget.strings;
     return Padding(
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(context).viewInsets.bottom,
@@ -659,8 +660,8 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
               const SizedBox(height: AppSpacing.lg),
               Text(
                 widget.existing == null
-                    ? 'Add Tapo Device'
-                    : 'Edit ${widget.existing!.name}',
+                    ? s.t('devices_add_title')
+                    : s.t('devices_edit_title', {'name': widget.existing!.name}),
                 style: AppTypography.headingLg,
               ),
               const SizedBox(height: AppSpacing.xl),
@@ -668,11 +669,11 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 controller: _nameCtrl,
                 onChanged: (_) => setState(() {}),
                 style: AppTypography.bodyLg,
-                decoration: const InputDecoration(
-                  labelText: 'Device name',
-                  hintText: 'e.g. Garage Charger',
+                decoration: InputDecoration(
+                  labelText: s.t('device_name_label'),
+                  hintText: s.t('device_name_hint'),
                   prefixIcon:
-                      Icon(Icons.label_outline_rounded, size: 18),
+                      const Icon(Icons.label_outline_rounded, size: 18),
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
@@ -681,10 +682,10 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 onChanged: (_) => setState(() {}),
                 keyboardType: TextInputType.url,
                 style: AppTypography.bodyLg,
-                decoration: const InputDecoration(
-                  labelText: 'IP address',
+                decoration: InputDecoration(
+                  labelText: s.t('ip_address_label'),
                   hintText: '192.168.1.75',
-                  prefixIcon: Icon(Icons.router_rounded, size: 18),
+                  prefixIcon: const Icon(Icons.router_rounded, size: 18),
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
@@ -693,9 +694,9 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 onChanged: (_) => setState(() {}),
                 keyboardType: TextInputType.emailAddress,
                 style: AppTypography.bodyLg,
-                decoration: const InputDecoration(
-                  labelText: 'TP-Link account e-mail',
-                  prefixIcon: Icon(Icons.email_outlined, size: 18),
+                decoration: InputDecoration(
+                  labelText: s.t('tapo_email_label'),
+                  prefixIcon: const Icon(Icons.email_outlined, size: 18),
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
@@ -705,7 +706,7 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                 obscureText: _obscurePass,
                 style: AppTypography.bodyLg,
                 decoration: InputDecoration(
-                  labelText: 'TP-Link account password',
+                  labelText: s.t('tapo_password_label'),
                   prefixIcon:
                       const Icon(Icons.lock_outline_rounded, size: 18),
                   suffixIcon: IconButton(
@@ -783,7 +784,7 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                               ),
                             )
                           : const Icon(Icons.wifi_find_rounded, size: 18),
-                      label: const Text('Test'),
+                      label: Text(s.t('test_button')),
                     ),
                   ),
                   const SizedBox(width: AppSpacing.md),
@@ -799,7 +800,7 @@ class _DeviceFormSheetState extends State<_DeviceFormSheet> {
                                 color: AppColors.background,
                               ),
                             )
-                          : const Text('Save'),
+                          : Text(s.t('save')),
                     ),
                   ),
                 ],
@@ -838,17 +839,16 @@ class _EmptyDevicesView extends StatelessWidget {
                 size: 48, color: AppColors.textTertiary),
             const SizedBox(height: AppSpacing.lg),
             Text(
-              isClientMode ? 'No plugs synced yet' : 'No smart plugs yet',
+              isClientMode
+                  ? strings.t('devices_empty_client_title')
+                  : strings.t('devices_empty_title'),
               style: AppTypography.headingMd,
             ),
             const SizedBox(height: AppSpacing.sm),
             Text(
               isClientMode
-                  ? 'Plug state is synced from the gateway. '
-                      'Make sure the gateway phone has at least one Tapo device configured '
-                      'and is connected to the broker.'
-                  : 'Add a TP-Link Tapo plug to control it from here '
-                      'and use it in automations.',
+                  ? strings.t('devices_empty_client_body')
+                  : strings.t('devices_empty_body'),
               style: AppTypography.bodyMd,
               textAlign: TextAlign.center,
             ),
@@ -859,7 +859,7 @@ class _EmptyDevicesView extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed: onAdd,
                   icon: const Icon(Icons.add_rounded, size: 18),
-                  label: const Text('Add Tapo device'),
+                  label: Text(strings.t('devices_add_button')),
                 ),
               ),
             ],

@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 
 /// Immutable bundle of automation settings.
 ///
-/// Tapo device credentials have moved to [TapoDevice] / [TapoDeviceService].
-/// The fields that referenced a single hardcoded plug are gone.
+/// Tapo device credentials and per-device on/off actions have moved to
+/// [TapoDevice] / [TapoDeviceService] and per-flow [FlowAction]s. This model
+/// now only holds the global battery thresholds and time window used by
+/// the simple (non-flow) automation engine.
 final class AutomationSettings {
   const AutomationSettings({
     this.enabled = false,
-    this.tapoOnUrl = '',
-    this.tapoOffUrl = '',
     this.lowThreshold = 10,
     this.highThreshold = 95,
     this.startTime = const TimeOfDay(hour: 21, minute: 0),
@@ -17,8 +17,6 @@ final class AutomationSettings {
 
   factory AutomationSettings.validated({
     bool enabled = false,
-    String tapoOnUrl = '',
-    String tapoOffUrl = '',
     required int lowThreshold,
     required int highThreshold,
     TimeOfDay startTime = const TimeOfDay(hour: 21, minute: 0),
@@ -28,8 +26,6 @@ final class AutomationSettings {
     final high = highThreshold.clamp(low + 1, 100);
     return AutomationSettings(
       enabled: enabled,
-      tapoOnUrl: tapoOnUrl.trim(),
-      tapoOffUrl: tapoOffUrl.trim(),
       lowThreshold: low,
       highThreshold: high,
       startTime: startTime,
@@ -38,23 +34,13 @@ final class AutomationSettings {
   }
 
   final bool enabled;
-  final String tapoOnUrl;
-  final String tapoOffUrl;
   final int lowThreshold;
   final int highThreshold;
   final TimeOfDay startTime;
   final TimeOfDay endTime;
 
-  /// Whether at least one webhook action is configured for ON.
-  bool get hasOnAction => tapoOnUrl.isNotEmpty;
-
-  /// Whether at least one webhook action is configured for OFF.
-  bool get hasOffAction => tapoOffUrl.isNotEmpty;
-
   AutomationSettings copyWith({
     bool? enabled,
-    String? tapoOnUrl,
-    String? tapoOffUrl,
     int? lowThreshold,
     int? highThreshold,
     TimeOfDay? startTime,
@@ -62,8 +48,6 @@ final class AutomationSettings {
   }) {
     return AutomationSettings.validated(
       enabled: enabled ?? this.enabled,
-      tapoOnUrl: tapoOnUrl ?? this.tapoOnUrl,
-      tapoOffUrl: tapoOffUrl ?? this.tapoOffUrl,
       lowThreshold: lowThreshold ?? this.lowThreshold,
       highThreshold: highThreshold ?? this.highThreshold,
       startTime: startTime ?? this.startTime,
@@ -88,8 +72,6 @@ final class AutomationSettings {
       identical(this, other) ||
       other is AutomationSettings &&
           other.enabled == enabled &&
-          other.tapoOnUrl == tapoOnUrl &&
-          other.tapoOffUrl == tapoOffUrl &&
           other.lowThreshold == lowThreshold &&
           other.highThreshold == highThreshold &&
           other.startTime == startTime &&
@@ -98,8 +80,6 @@ final class AutomationSettings {
   @override
   int get hashCode => Object.hash(
         enabled,
-        tapoOnUrl,
-        tapoOffUrl,
         lowThreshold,
         highThreshold,
         startTime,
@@ -110,8 +90,6 @@ final class AutomationSettings {
 extension AutomationSettingsJson on AutomationSettings {
   Map<String, dynamic> toJson() => {
         'enabled': enabled,
-        'tapoOnUrl': tapoOnUrl,
-        'tapoOffUrl': tapoOffUrl,
         'lowThreshold': lowThreshold,
         'highThreshold': highThreshold,
         'startTime':
@@ -131,8 +109,6 @@ extension AutomationSettingsJson on AutomationSettings {
 
     return AutomationSettings.validated(
       enabled: json['enabled'] as bool? ?? false,
-      tapoOnUrl: json['tapoOnUrl'] as String? ?? '',
-      tapoOffUrl: json['tapoOffUrl'] as String? ?? '',
       lowThreshold: (json['lowThreshold'] as num? ?? 10).toInt(),
       highThreshold: (json['highThreshold'] as num? ?? 95).toInt(),
       startTime: parseTime(json['startTime'] as String? ?? '21:00'),

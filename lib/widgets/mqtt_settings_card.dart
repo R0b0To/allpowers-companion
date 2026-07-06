@@ -7,6 +7,7 @@ import '../services/mqtt_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/debounced_settings_field.dart';
 import '../widgets/section_card.dart';
+import '../widgets/status_banner.dart';
 
 /// Self-contained MQTT configuration card, embedded in [AutomationsTab].
 ///
@@ -16,6 +17,15 @@ import '../widgets/section_card.dart';
 /// The card intentionally matches the visual style of the existing
 /// [SectionCard]-based settings in [AutomationsTab] (Local Tapo card, Smart
 /// Charging card) so it fits naturally without any custom styling.
+///
+/// ## Security posture — advisory only
+/// The command/RPC channel has no app-level authentication beyond whatever
+/// the broker itself enforces (see [_securityWarning]): anyone who can
+/// publish to `<prefix>/cmd/+` or `<prefix>/rpc/request` can control the
+/// station. Rather than invent a signing scheme, this card surfaces the risk
+/// directly — no TLS, no credentials, and/or a recognizably public broker —
+/// so the person configuring it can make an informed choice (private broker,
+/// TLS, real credentials) instead of discovering the gap the hard way.
 class MqttSettingsCard extends StatefulWidget {
   const MqttSettingsCard({
     super.key,
@@ -44,6 +54,17 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
 
   bool _testing = false;
   bool _obscurePass = true;
+
+  /// Hostnames of well-known public MQTT test brokers. Not exhaustive — this
+  /// only catches the obvious, commonly-copy-pasted ones (including the one
+  /// this very card used to suggest as a hint) so the warning fires for the
+  /// most likely accidental case, not as a security boundary in itself.
+  static const _knownPublicBrokerHosts = {
+    'broker.hivemq.com',
+    'broker.emqx.io',
+    'test.mosquitto.org',
+    'mqtt.eclipseprojects.io',
+  };
 
   @override
   void initState() {
@@ -147,6 +168,48 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
       ));
   }
 
+  // ── Security warning ──────────────────────────────────────────────────────
+
+  bool _isKnownPublicBroker(String host) {
+    final h = host.trim().toLowerCase();
+    if (h.isEmpty) return false;
+    return _knownPublicBrokerHosts
+        .any((known) => h == known || h.endsWith('.$known'));
+  }
+
+  /// Returns a human-readable summary of security gaps in [settings], or
+  /// `null` if there's nothing to flag. Purely advisory — this never blocks
+  /// saving or connecting, it only tells the person what they're exposing.
+  String? _securityWarning(MqttSettings settings) {
+    if (settings.mode == AppMode.standalone) return null;
+
+    final concerns = <String>[];
+
+    if (_isKnownPublicBroker(settings.brokerHost)) {
+      concerns.add(
+        'This looks like a public/shared test broker — anyone can connect '
+        'to it, so your topic prefix is not a real security boundary there.',
+      );
+    }
+    if (!settings.useTls) {
+      concerns.add(
+        'TLS is off — broker traffic, including any username/password, '
+        'travels in plaintext.',
+      );
+    }
+    if (settings.username.trim().isEmpty || settings.password.isEmpty) {
+      concerns.add(
+        'No username/password is set — anyone who can reach this broker '
+        'can send commands to your station without authenticating.',
+      );
+    }
+
+    if (concerns.isEmpty) return null;
+    if (concerns.length == 1) return concerns.first;
+    return 'This connection has some security gaps:\n'
+        '${concerns.map((c) => '•  $c').join('\n')}';
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -156,6 +219,7 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
     final mqtt = widget.mqtt;
     final isActive = settings.mode != AppMode.standalone;
     final theme = Theme.of(context);
+    final securityWarning = _securityWarning(settings);
 
     return SectionCard(
       title: s.t('mqtt_section_title'),
@@ -178,6 +242,15 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
           _ModeDescription(mode: settings.mode, strings: s),
           const SizedBox(height: AppSpacing.lg),
 
+          // ── Security warning (advisory only — no protocol change) ───────
+          if (securityWarning != null) ...[
+            StatusBanner(
+              message: securityWarning,
+              variant: BannerVariant.warning,
+            ),
+            const SizedBox(height: AppSpacing.lg),
+          ],
+
           // ── Connection status badge ─────────────────────────────────────
           AnimatedBuilder(
             animation: mqtt,
@@ -192,7 +265,7 @@ class _MqttSettingsCardState extends State<MqttSettingsCard> {
             prefixIcon: Icons.dns_rounded,
             onChangedDebounced: _persist,
             keyboardType: TextInputType.url,
-            hint: 'broker.hivemq.com',
+            hint: 'e.g. 192.168.1.10 or mybroker.example.com',
           ),
           const SizedBox(height: AppSpacing.sm),
 

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_strings.dart';
 import '../models/automation_flow.dart';
-import '../models/automation_settings.dart';
 import '../models/tapo_device.dart';
 import '../theme/app_theme.dart';
 
@@ -15,8 +15,8 @@ import '../theme/app_theme.dart';
 ///     fullscreenDialog: true,
 ///     builder: (_) => FlowEditorScreen(
 ///       flow: existing,
-///       settings: settings,
 ///       tapoDevices: devices,
+///       strings: strings,
 ///     ),
 ///   ),
 /// );
@@ -26,13 +26,13 @@ class FlowEditorScreen extends StatefulWidget {
   const FlowEditorScreen({
     super.key,
     required this.flow,
-    required this.settings,
     required this.tapoDevices,
+    required this.strings,
   });
 
   final AutomationFlow? flow;
-  final AutomationSettings settings;
   final List<TapoDevice> tapoDevices;
+  final AppStrings strings;
 
   @override
   State<FlowEditorScreen> createState() => _FlowEditorScreenState();
@@ -48,7 +48,7 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
   void initState() {
     super.initState();
     final f = widget.flow;
-    _name = f?.name ?? 'New Automation';
+    _name = f?.name ?? widget.strings.t('flow_new_automation');
     _trigger = f?.trigger ??
         const FlowTrigger(
           type: FlowTriggerType.batteryFallsBelow,
@@ -79,9 +79,20 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
     ));
   }
 
+  void _showAddSheet() {
+    showModalBottomSheet<FlowActionType>(
+      context: context,
+      builder: (_) => _AddActionSheet(strings: widget.strings),
+    ).then((type) {
+      if (type == null) return;
+      setState(() => _actions.add(FlowAction(id: newFlowId(), type: type)));
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final s = widget.strings;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: theme.colorScheme.surfaceContainerLow,
@@ -89,9 +100,9 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
           controller: _nameCtrl,
           onChanged: (v) => setState(() => _name = v),
           style: AppTypography.headingMd,
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             border: InputBorder.none,
-            hintText: 'Automation name',
+            hintText: s.t('flow_name_hint'),
             isDense: true,
             contentPadding: EdgeInsets.zero,
             filled: false,
@@ -101,7 +112,7 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
           TextButton(
             onPressed: _save,
             child: Text(
-              'Save',
+              s.t('save'),
               style: AppTypography.headingSm.copyWith(
                 color: theme.colorScheme.primary,
               ),
@@ -117,28 +128,31 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
         padding: const EdgeInsets.all(AppSpacing.lg),
         children: [
           // ── Trigger ─────────────────────────────────────────────────────
-          const _SectionLabel(title: 'Trigger', icon: Icons.flash_on_rounded),
+          _SectionLabel(
+              title: s.t('flow_trigger_label'), icon: Icons.flash_on_rounded),
           const SizedBox(height: AppSpacing.sm),
           _TriggerCard(
             trigger: _trigger,
             tapoDevices: widget.tapoDevices,
+            strings: s,
             onChanged: (t) => setState(() => _trigger = t),
           ),
           const SizedBox(height: AppSpacing.xl),
 
           // ── Actions ──────────────────────────────────────────────────────
           _SectionLabel(
-            title: 'Action steps',
+            title: s.t('flow_action_steps_label'),
             icon: Icons.playlist_play_rounded,
             trailing: Text(
-              '${_actions.length} step${_actions.length == 1 ? '' : 's'}',
+              '${_actions.length} '
+              '${_actions.length == 1 ? s.t('flow_step_singular') : s.t('flow_step_plural')}',
               style: AppTypography.labelMd,
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
 
           if (_actions.isEmpty)
-            _EmptyActionsHint(onAdd: _showAddSheet)
+            _EmptyActionsHint(strings: s, onAdd: _showAddSheet)
           else
             ReorderableListView.builder(
               shrinkWrap: true,
@@ -156,8 +170,8 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
                 key: ValueKey(_actions[index].id),
                 index: index,
                 action: _actions[index],
-                settings: widget.settings,
                 tapoDevices: widget.tapoDevices,
+                strings: s,
                 onChanged: (updated) =>
                     setState(() => _actions[index] = updated),
                 onDelete: () => setState(() => _actions.removeAt(index)),
@@ -165,21 +179,11 @@ class _FlowEditorScreenState extends State<FlowEditorScreen> {
             ),
 
           const SizedBox(height: AppSpacing.lg),
-          _AddStepButton(onPressed: _showAddSheet),
+          _AddStepButton(strings: s, onPressed: _showAddSheet),
           const SizedBox(height: AppSpacing.xxxl),
         ],
       ),
     );
-  }
-
-  void _showAddSheet() {
-    showModalBottomSheet<FlowActionType>(
-      context: context,
-      builder: (_) => const _AddActionSheet(),
-    ).then((type) {
-      if (type == null) return;
-      setState(() => _actions.add(FlowAction(id: newFlowId(), type: type)));
-    });
   }
 }
 
@@ -189,11 +193,13 @@ class _TriggerCard extends StatelessWidget {
   const _TriggerCard({
     required this.trigger,
     required this.tapoDevices,
+    required this.strings,
     required this.onChanged,
   });
 
   final FlowTrigger trigger;
   final List<TapoDevice> tapoDevices;
+  final AppStrings strings;
   final ValueChanged<FlowTrigger> onChanged;
 
   @override
@@ -227,7 +233,7 @@ class _TriggerCard extends StatelessWidget {
             runSpacing: AppSpacing.sm,
             children: [
               _ChoiceChip(
-                label: 'Falls Below',
+                label: strings.t('flow_falls_below'),
                 icon: Icons.trending_down_rounded,
                 selected: isFall,
                 color: theme.colorScheme.error,
@@ -235,7 +241,7 @@ class _TriggerCard extends StatelessWidget {
                     type: FlowTriggerType.batteryFallsBelow)),
               ),
               _ChoiceChip(
-                label: 'Rises Above',
+                label: strings.t('flow_rises_above'),
                 icon: Icons.trending_up_rounded,
                 selected: trigger.type == FlowTriggerType.batteryRisesAbove,
                 color: AppColors.success,
@@ -243,7 +249,7 @@ class _TriggerCard extends StatelessWidget {
                     type: FlowTriggerType.batteryRisesAbove)),
               ),
               _ChoiceChip(
-                label: 'Plug State',
+                label: strings.t('flow_plug_state'),
                 icon: Icons.power_rounded,
                 selected: isTapo,
                 color: AppColors.warning,
@@ -284,7 +290,7 @@ class _TriggerCard extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
                 ),
                 const SizedBox(width: AppSpacing.sm),
-                Text('Battery threshold', style: AppTypography.bodyMd),
+                Text(strings.t('flow_battery_threshold'), style: AppTypography.bodyMd),
                 const Spacer(),
                 Text(
                   '${trigger.threshold}%',
@@ -315,7 +321,7 @@ class _TriggerCard extends StatelessWidget {
                         theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
-                  child: Text('Also require plug state',
+                  child: Text(strings.t('flow_require_plug_state'),
                       style: AppTypography.bodyMd),
                 ),
                 Switch(
@@ -334,8 +340,12 @@ class _TriggerCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 4, bottom: AppSpacing.sm),
                 child: Text(
-                  'e.g. battery below ${trigger.threshold}% AND plug is '
-                  '${trigger.tapoExpectedOn == false ? 'ON' : 'OFF'}',
+                  strings.t('flow_plug_condition_hint', {
+                    'threshold': '${trigger.threshold}',
+                    'state': trigger.tapoExpectedOn == false
+                        ? strings.t('on')
+                        : strings.t('off'),
+                  }),
                   style: AppTypography.labelSm,
                 ),
               ),
@@ -349,7 +359,7 @@ class _TriggerCard extends StatelessWidget {
                         color: AppColors.warning.withValues(alpha:0.3)),
                   ),
                   child: Text(
-                    'No Tapo devices found. Add one in the Devices tab.',
+                    strings.t('flow_no_tapo_devices'),
                     style: AppTypography.bodySm
                         .copyWith(color: AppColors.warning),
                   ),
@@ -361,7 +371,7 @@ class _TriggerCard extends StatelessWidget {
                           ? trigger.tapoDeviceId
                           : null)
                       : null,
-                  hint: Text('Select plug', style: AppTypography.bodyMd),
+                  hint: Text(strings.t('flow_select_plug'), style: AppTypography.bodyMd),
                   decoration: InputDecoration(
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 12),
@@ -392,10 +402,10 @@ class _TriggerCard extends StatelessWidget {
                       color: theme.colorScheme.onSurfaceVariant
                           .withValues(alpha:0.6)),
                   const SizedBox(width: AppSpacing.sm),
-                  Text('Plug must be', style: AppTypography.bodyMd),
+                  Text(strings.t('flow_plug_must_be'), style: AppTypography.bodyMd),
                   const Spacer(),
                   _SmallChip(
-                    label: 'ON',
+                    label: strings.t('on'),
                     selected: trigger.tapoExpectedOn == false,
                     color: AppColors.success,
                     onTap: () =>
@@ -403,7 +413,7 @@ class _TriggerCard extends StatelessWidget {
                   ),
                   const SizedBox(width: AppSpacing.sm),
                   _SmallChip(
-                    label: 'OFF',
+                    label: strings.t('off'),
                     selected: trigger.tapoExpectedOn == true,
                     color: theme.colorScheme.error,
                     onTap: () =>
@@ -426,7 +436,7 @@ class _TriggerCard extends StatelessWidget {
                     color:
                         theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
                 const SizedBox(width: AppSpacing.sm),
-                Text('Plug to monitor', style: AppTypography.bodyMd),
+                Text(strings.t('flow_plug_to_monitor'), style: AppTypography.bodyMd),
               ],
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -440,7 +450,7 @@ class _TriggerCard extends StatelessWidget {
                       color: AppColors.warning.withValues(alpha:0.3)),
                 ),
                 child: Text(
-                  'No Tapo devices found. Add one in the Devices tab.',
+                  strings.t('flow_no_tapo_devices'),
                   style: AppTypography.bodySm
                       .copyWith(color: AppColors.warning),
                 ),
@@ -453,7 +463,7 @@ class _TriggerCard extends StatelessWidget {
                         ? trigger.tapoDeviceId
                         : null)
                     : null,
-                hint: Text('Select plug',
+                hint: Text(strings.t('flow_select_plug'),
                     style: AppTypography.bodyMd),
                 decoration: InputDecoration(
                   contentPadding: const EdgeInsets.symmetric(
@@ -487,10 +497,10 @@ class _TriggerCard extends StatelessWidget {
                     color:
                         theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
                 const SizedBox(width: AppSpacing.sm),
-                Text('Trigger when plug is', style: AppTypography.bodyMd),
+                Text(strings.t('flow_trigger_when_plug_is'), style: AppTypography.bodyMd),
                 const Spacer(),
                 _SmallChip(
-                  label: 'OFF',
+                  label: strings.t('off'),
                   selected: trigger.tapoExpectedOn == true,
                   color: AppColors.success,
                   onTap: () =>
@@ -498,7 +508,7 @@ class _TriggerCard extends StatelessWidget {
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 _SmallChip(
-                  label: 'ON',
+                  label: strings.t('on'),
                   selected: trigger.tapoExpectedOn == false,
                   color: theme.colorScheme.error,
                   onTap: () =>
@@ -511,10 +521,10 @@ class _TriggerCard extends StatelessWidget {
               padding: const EdgeInsets.only(left: 4),
               child: Text(
                 trigger.tapoExpectedOn == true
-                    ? 'Fires when plug is OFF and you want it ON (inside window)'
+                    ? strings.t('flow_fires_off_wanted_on')
                     : trigger.tapoExpectedOn == false
-                        ? 'Fires when plug is ON and you want it OFF (inside window)'
-                        : 'Choose the expected plug state',
+                        ? strings.t('flow_fires_on_wanted_off')
+                        : strings.t('flow_choose_expected_state'),
                 style: AppTypography.labelSm,
               ),
             ),
@@ -534,8 +544,8 @@ class _TriggerCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   isTapo
-                      ? 'Active window (required)'
-                      : 'Time window (optional)',
+                      ? strings.t('flow_window_required')
+                      : strings.t('flow_window_optional'),
                   style: AppTypography.bodyMd,
                 ),
               ),
@@ -558,7 +568,7 @@ class _TriggerCard extends StatelessWidget {
             Row(
               children: [
                 _TimeTile(
-                  label: 'From',
+                  label: strings.t('flow_time_from'),
                   time: trigger.windowStart ??
                       const TimeOfDay(hour: 8, minute: 0),
                   onPick: () async {
@@ -573,7 +583,7 @@ class _TriggerCard extends StatelessWidget {
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 _TimeTile(
-                  label: 'To',
+                  label: strings.t('flow_time_to'),
                   time: trigger.windowEnd ??
                       const TimeOfDay(hour: 22, minute: 0),
                   onPick: () async {
@@ -671,16 +681,16 @@ class _ActionCard extends StatelessWidget {
     super.key,
     required this.index,
     required this.action,
-    required this.settings,
     required this.tapoDevices,
+    required this.strings,
     required this.onChanged,
     required this.onDelete,
   });
 
   final int index;
   final FlowAction action;
-  final AutomationSettings settings;
   final List<TapoDevice> tapoDevices;
+  final AppStrings strings;
   final ValueChanged<FlowAction> onChanged;
   final VoidCallback onDelete;
 
@@ -695,10 +705,10 @@ class _ActionCard extends StatelessWidget {
       };
 
   String get _label => switch (action.type) {
-        FlowActionType.wait => 'Wait',
-        FlowActionType.setBleOutlet => 'Set outlet',
-        FlowActionType.fireWebhook => 'Webhook',
-        FlowActionType.controlTapo => 'Tapo plug',
+        FlowActionType.wait => strings.t('flow_action_wait'),
+        FlowActionType.setBleOutlet => strings.t('flow_action_set_outlet'),
+        FlowActionType.fireWebhook => strings.t('flow_action_webhook'),
+        FlowActionType.controlTapo => strings.t('flow_action_tapo_plug'),
       };
 
   @override
@@ -762,8 +772,8 @@ class _ActionCard extends StatelessWidget {
                 AppSpacing.xl + AppSpacing.lg, 0, AppSpacing.md, AppSpacing.md),
             child: _ActionConfig(
               action: action,
-              settings: settings,
               tapoDevices: tapoDevices,
+              strings: strings,
               onChanged: onChanged,
             ),
           ),
@@ -776,36 +786,41 @@ class _ActionCard extends StatelessWidget {
 class _ActionConfig extends StatelessWidget {
   const _ActionConfig({
     required this.action,
-    required this.settings,
     required this.tapoDevices,
+    required this.strings,
     required this.onChanged,
   });
 
   final FlowAction action;
-  final AutomationSettings settings;
   final List<TapoDevice> tapoDevices;
+  final AppStrings strings;
   final ValueChanged<FlowAction> onChanged;
 
   @override
   Widget build(BuildContext context) => switch (action.type) {
         FlowActionType.wait =>
-          _WaitConfig(action: action, onChanged: onChanged),
+          _WaitConfig(action: action, strings: strings, onChanged: onChanged),
         FlowActionType.setBleOutlet =>
-          _OutletConfig(action: action, onChanged: onChanged),
+          _OutletConfig(action: action, strings: strings, onChanged: onChanged),
         FlowActionType.fireWebhook =>
           _WebhookConfig(action: action, onChanged: onChanged),
         FlowActionType.controlTapo => _TapoConfig(
             action: action,
-            settings: settings,
             tapoDevices: tapoDevices,
+            strings: strings,
             onChanged: onChanged),
       };
 }
 
 // wait
 class _WaitConfig extends StatefulWidget {
-  const _WaitConfig({required this.action, required this.onChanged});
+  const _WaitConfig({
+    required this.action,
+    required this.strings,
+    required this.onChanged,
+  });
   final FlowAction action;
+  final AppStrings strings;
   final ValueChanged<FlowAction> onChanged;
   @override
   State<_WaitConfig> createState() => _WaitConfigState();
@@ -830,7 +845,7 @@ class _WaitConfigState extends State<_WaitConfig> {
     final theme = Theme.of(context);
     return Row(
       children: [
-        Text('Pause for', style: AppTypography.bodyMd),
+        Text(widget.strings.t('flow_pause_for'), style: AppTypography.bodyMd),
         const SizedBox(width: AppSpacing.sm),
         SizedBox(
           width: 64,
@@ -868,7 +883,7 @@ class _WaitConfigState extends State<_WaitConfig> {
           ),
         ),
         const SizedBox(width: AppSpacing.sm),
-        Text('seconds', style: AppTypography.bodyMd),
+        Text(widget.strings.t('flow_seconds'), style: AppTypography.bodyMd),
       ],
     );
   }
@@ -876,8 +891,13 @@ class _WaitConfigState extends State<_WaitConfig> {
 
 // setBleOutlet
 class _OutletConfig extends StatelessWidget {
-  const _OutletConfig({required this.action, required this.onChanged});
+  const _OutletConfig({
+    required this.action,
+    required this.strings,
+    required this.onChanged,
+  });
   final FlowAction action;
+  final AppStrings strings;
   final ValueChanged<FlowAction> onChanged;
 
   @override
@@ -895,13 +915,13 @@ class _OutletConfig extends StatelessWidget {
             )),
         const SizedBox(width: AppSpacing.sm),
         _Chip(
-          label: 'ON',
+          label: strings.t('on'),
           selected: action.outletOn,
           color: AppColors.success,
           onTap: () => onChanged(action.copyWith(outletOn: true)),
         ),
         _Chip(
-          label: 'OFF',
+          label: strings.t('off'),
           selected: !action.outletOn,
           color: theme.colorScheme.error,
           onTap: () => onChanged(action.copyWith(outletOn: false)),
@@ -955,14 +975,14 @@ class _WebhookConfigState extends State<_WebhookConfig> {
 class _TapoConfig extends StatelessWidget {
   const _TapoConfig({
     required this.action,
-    required this.settings,
     required this.tapoDevices,
+    required this.strings,
     required this.onChanged,
   });
 
   final FlowAction action;
-  final AutomationSettings settings;
   final List<TapoDevice> tapoDevices;
+  final AppStrings strings;
   final ValueChanged<FlowAction> onChanged;
 
   @override
@@ -980,20 +1000,20 @@ class _TapoConfig extends StatelessWidget {
               borderRadius: AppRadius.smBR,
             ),
             child: Text(
-              'No Tapo devices configured. Add one in the Devices tab.',
+              strings.t('flow_no_tapo_configured'),
               style:
                   AppTypography.labelSm.copyWith(color: AppColors.warning),
             ),
           )
         else ...[
-          Text('Device', style: AppTypography.labelMd),
+          Text(strings.t('flow_device_label'), style: AppTypography.labelMd),
           const SizedBox(height: AppSpacing.xs),
           DropdownButtonFormField<String>(
             value: action.tapoDeviceId.isNotEmpty &&
                     tapoDevices.any((d) => d.id == action.tapoDeviceId)
                 ? action.tapoDeviceId
                 : null,
-            hint: Text('Select plug', style: AppTypography.bodyMd),
+            hint: Text(strings.t('flow_select_plug'), style: AppTypography.bodyMd),
             decoration: InputDecoration(
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(
@@ -1024,14 +1044,14 @@ class _TapoConfig extends StatelessWidget {
         Row(
           children: [
             _Chip(
-              label: 'ON',
+              label: strings.t('on'),
               selected: action.tapoOn,
               color: AppColors.success,
               onTap: () => onChanged(action.copyWith(tapoOn: true)),
             ),
             const SizedBox(width: AppSpacing.sm),
             _Chip(
-              label: 'OFF',
+              label: strings.t('off'),
               selected: !action.tapoOn,
               color: theme.colorScheme.error,
               onTap: () => onChanged(action.copyWith(tapoOn: false)),
@@ -1046,7 +1066,8 @@ class _TapoConfig extends StatelessWidget {
 // ── Add action sheet ──────────────────────────────────────────────────────────
 
 class _AddActionSheet extends StatelessWidget {
-  const _AddActionSheet();
+  const _AddActionSheet({required this.strings});
+  final AppStrings strings;
 
   @override
   Widget build(BuildContext context) {
@@ -1056,29 +1077,29 @@ class _AddActionSheet extends StatelessWidget {
         FlowActionType.wait,
         Icons.timer_outlined,
         theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6),
-        'Wait',
-        'Pause for N seconds before the next step'
+        strings.t('flow_action_wait'),
+        strings.t('flow_action_wait_desc'),
       ),
       (
         FlowActionType.setBleOutlet,
         Icons.power_rounded,
         theme.colorScheme.primary,
-        'Set BLE outlet',
-        'Toggle USB, AC, or DC output directly via Bluetooth'
+        strings.t('flow_action_set_outlet_title'),
+        strings.t('flow_action_set_outlet_desc'),
       ),
       (
         FlowActionType.fireWebhook,
         Icons.link_rounded,
         AppColors.info,
-        'Fire webhook',
-        'Send an HTTP GET request to any URL'
+        strings.t('flow_action_webhook_title'),
+        strings.t('flow_action_webhook_desc'),
       ),
       (
         FlowActionType.controlTapo,
         Icons.wifi_tethering_rounded,
         AppColors.warning,
-        'Control Tapo',
-        'Turn a TP-Link Tapo plug on or off'
+        strings.t('flow_action_control_tapo_title'),
+        strings.t('flow_action_control_tapo_desc'),
       ),
     ];
 
@@ -1089,7 +1110,7 @@ class _AddActionSheet extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(
                 AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.sm),
-            child: Text('Add step', style: AppTypography.headingMd),
+            child: Text(strings.t('add_step'), style: AppTypography.headingMd),
           ),
           ...options.map((o) {
             final (type, icon, color, title, sub) = o;
@@ -1265,7 +1286,8 @@ class _Chip extends StatelessWidget {
 }
 
 class _EmptyActionsHint extends StatelessWidget {
-  const _EmptyActionsHint({required this.onAdd});
+  const _EmptyActionsHint({required this.strings, required this.onAdd});
+  final AppStrings strings;
   final VoidCallback onAdd;
 
   @override
@@ -1284,10 +1306,10 @@ class _EmptyActionsHint extends StatelessWidget {
               size: 32,
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.4)),
           const SizedBox(height: AppSpacing.md),
-          Text('No steps yet', style: AppTypography.headingSm),
+          Text(strings.t('flow_no_steps_title'), style: AppTypography.headingSm),
           const SizedBox(height: AppSpacing.xs),
           Text(
-            'Steps run in order when the trigger fires.',
+            strings.t('flow_no_steps_body'),
             style: AppTypography.bodyMd,
             textAlign: TextAlign.center,
           ),
@@ -1295,7 +1317,7 @@ class _EmptyActionsHint extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: onAdd,
             icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Add first step'),
+            label: Text(strings.t('flow_add_first_step')),
           ),
         ],
       ),
@@ -1304,7 +1326,8 @@ class _EmptyActionsHint extends StatelessWidget {
 }
 
 class _AddStepButton extends StatelessWidget {
-  const _AddStepButton({required this.onPressed});
+  const _AddStepButton({required this.strings, required this.onPressed});
+  final AppStrings strings;
   final VoidCallback onPressed;
 
   @override
@@ -1315,7 +1338,7 @@ class _AddStepButton extends StatelessWidget {
       child: OutlinedButton.icon(
         onPressed: onPressed,
         icon: const Icon(Icons.add_rounded, size: 18),
-        label: const Text('Add step'),
+        label: Text(strings.t('add_step')),
         style: OutlinedButton.styleFrom(
           foregroundColor: theme.colorScheme.primary,
           side: BorderSide(color: theme.colorScheme.primary),

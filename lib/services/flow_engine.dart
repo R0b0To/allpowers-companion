@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../models/automation_flow.dart';
 import '../models/automation_history_entry.dart';
-import '../models/automation_settings.dart';
 import '../repositories/flow_repository.dart';
 import '../utils/logger.dart';
 import 'ble_service.dart';
@@ -71,14 +70,11 @@ final class FlowEngine {
 
   // ── Evaluation (called on BLE status update, and periodically) ─────────────
 
-  Future<void> evaluate(
-    List<AutomationFlow> flows,
-    AutomationSettings settings,
-  ) async {
+  Future<void> evaluate(List<AutomationFlow> flows) async {
     if (!_initialized) return;
     for (final flow in flows) {
       if (!flow.enabled) continue;
-      _fireAndLog(_evaluateFlow(flow, settings), flow.name);
+      _fireAndLog(_evaluateFlow(flow), flow.name);
     }
   }
 
@@ -86,17 +82,14 @@ final class FlowEngine {
   /// pure [FlowTriggerType.tapoPlugState] trigger, or a battery trigger with
   /// [FlowTrigger.requirePlugState] set. Called by [TapoDeviceService]
   /// after every poll cycle so plug-state changes are detected promptly.
-  Future<void> evaluateTapoTriggers(
-    List<AutomationFlow> flows,
-    AutomationSettings settings,
-  ) async {
+  Future<void> evaluateTapoTriggers(List<AutomationFlow> flows) async {
     if (!_initialized) return;
     for (final flow in flows) {
       if (!flow.enabled) continue;
       final dependsOnTapo = flow.trigger.type == FlowTriggerType.tapoPlugState ||
           flow.trigger.requirePlugState;
       if (!dependsOnTapo) continue;
-      _fireAndLog(_evaluateFlow(flow, settings), flow.name);
+      _fireAndLog(_evaluateFlow(flow), flow.name);
     }
   }
 
@@ -114,10 +107,7 @@ final class FlowEngine {
     });
   }
 
-  Future<void> _evaluateFlow(
-    AutomationFlow flow,
-    AutomationSettings settings,
-  ) async {
+  Future<void> _evaluateFlow(AutomationFlow flow) async {
     if (_running[flow.id] == true) return;
 
     // ── Time window guard ──────────────────────────────────────────────────
@@ -179,7 +169,7 @@ final class FlowEngine {
     try {
       final triggerLevel = _ble.status.batteryLevel;
       for (final action in flow.actions) {
-        await _execute(action, settings, triggerLevel, flow.name);
+        await _execute(action, triggerLevel, flow.name);
       }
       Log.i('FlowEngine', '"${flow.name}" completed');
     } catch (e) {
@@ -218,7 +208,6 @@ final class FlowEngine {
 
   Future<void> _execute(
     FlowAction action,
-    AutomationSettings settings,
     int triggerLevel,
     String flowName,
   ) async {
@@ -346,17 +335,14 @@ final class FlowEngine {
     );
   }
 
-  Future<void> evaluateOnce(
-    AutomationFlow flow,
-    AutomationSettings settings,
-  ) async {
+  Future<void> evaluateOnce(AutomationFlow flow) async {
     if (_running[flow.id] == true) return;
     _running[flow.id] = true;
     Log.i('FlowEngine', 'Manual trigger: "${flow.name}"');
     try {
       final triggerLevel = _ble.status.batteryLevel;
       for (final action in flow.actions) {
-        await _execute(action, settings, triggerLevel, flow.name);
+        await _execute(action, triggerLevel, flow.name);
       }
     } catch (e) {
       Log.e('FlowEngine', 'Error in manual trigger "${flow.name}"', e);

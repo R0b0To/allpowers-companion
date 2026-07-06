@@ -93,7 +93,6 @@ class _MainShellState extends State<MainShell> {
 
     final automationsTab = AutomationsTab(
       flows:          c.flows,
-      settings:       c.settings,
       strings:        strings,
       tapoDevices:    c.tapoDevices.devices,
       history:        c.history,

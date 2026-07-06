@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_strings.dart';
 import '../models/automation_flow.dart';
-import '../models/automation_settings.dart';
 import '../models/tapo_device.dart';
 import '../services/history_service.dart';
 import '../theme/app_theme.dart';
@@ -13,7 +12,6 @@ class AutomationsTab extends StatefulWidget {
   const AutomationsTab({
     super.key,
     required this.flows,
-    required this.settings,
     required this.strings,
     required this.tapoDevices,
     required this.history,
@@ -22,7 +20,6 @@ class AutomationsTab extends StatefulWidget {
   });
 
   final List<AutomationFlow> flows;
-  final AutomationSettings settings;
   final AppStrings strings;
   final List<TapoDevice> tapoDevices;
   final HistoryService history;
@@ -62,8 +59,8 @@ class _AutomationsTabState extends State<AutomationsTab>
         fullscreenDialog: true,
         builder: (_) => FlowEditorScreen(
           flow: existing,
-          settings: widget.settings,
           tapoDevices: widget.tapoDevices,
+          strings: widget.strings,
         ),
       ),
     );
@@ -89,9 +86,12 @@ class _AutomationsTabState extends State<AutomationsTab>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Delete "${flow.name}"?', style: AppTypography.headingMd),
+        title: Text(
+          widget.strings.t('flow_delete_title', {'name': flow.name}),
+          style: AppTypography.headingMd,
+        ),
         content: Text(
-          'This automation will be permanently removed.',
+          widget.strings.t('flow_delete_body'),
           style: AppTypography.bodyMd,
         ),
         actions: [
@@ -110,7 +110,7 @@ class _AutomationsTabState extends State<AutomationsTab>
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
             child: Text(
-              'Delete',
+              widget.strings.t('delete'),
               style: AppTypography.headingSm.copyWith(
                 color: Theme.of(context).colorScheme.error,
               ),
@@ -129,8 +129,8 @@ class _AutomationsTabState extends State<AutomationsTab>
     widget.onFlowsChanged([...widget.flows, ...buildDefaultFlows()]);
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(const SnackBar(
-        content: Text('2 starter automations added — tap to customise'),
+      ..showSnackBar(SnackBar(
+        content: Text(widget.strings.t('automations_templates_added')),
       ));
   }
 
@@ -233,7 +233,7 @@ class _AutomationsTabState extends State<AutomationsTab>
                   const SizedBox(height: AppSpacing.xs),
                   Text(
                     _isFlowsTab
-                        ? 'Custom sequences triggered by battery or plug events.'
+                        ? s.t('automations_description')
                         : s.t('history_description'),
                     style: AppTypography.bodyMd,
                   ),
@@ -310,7 +310,7 @@ class _AutomationsTabState extends State<AutomationsTab>
               onPressed: () => _openEditor(null),
               backgroundColor: theme.colorScheme.primary,
               foregroundColor: theme.colorScheme.onPrimary,
-              tooltip: 'New automation',
+              tooltip: s.t('flow_new_automation_tooltip'),
               child: const Icon(Icons.add_rounded),
             )
           : null,
@@ -357,6 +357,7 @@ class _FlowsView extends StatelessWidget {
             ),
           Expanded(
             child: _EmptyState(
+              strings: strings,
               onAddBlank: onAddBlank,
               onAddTemplates: onAddTemplates,
             ),
@@ -389,6 +390,7 @@ class _FlowsView extends StatelessWidget {
           child: _FlowCard(
             flow: flow,
             tapoDevices: tapoDevices,
+            strings: strings,
             onTap: () => onTap(flow),
             onToggle: (v) => onToggle(flow, v),
             onDelete: () => onDelete(flow),
@@ -487,8 +489,7 @@ class _ClientModeBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              'Automations sync to the gateway and run there. '
-              'Changes publish automatically when connected.',
+              strings.t('automations_client_banner'),
               style: AppTypography.labelSm.copyWith(color: AppColors.info),
             ),
           ),
@@ -498,14 +499,13 @@ class _ClientModeBanner extends StatelessWidget {
   }
 }
 
-// ── Flow card, Step count pill, and Empty state widgets remain identical ──
-
 // ── Flow card ─────────────────────────────────────────────────────────────────
 
 class _FlowCard extends StatelessWidget {
   const _FlowCard({
     required this.flow,
     required this.tapoDevices,
+    required this.strings,
     required this.onTap,
     required this.onToggle,
     required this.onDelete,
@@ -513,14 +513,15 @@ class _FlowCard extends StatelessWidget {
 
   final AutomationFlow flow;
   final List<TapoDevice> tapoDevices;
+  final AppStrings strings;
   final VoidCallback onTap;
   final ValueChanged<bool> onToggle;
   final VoidCallback onDelete;
 
   String _deviceName(String? id) {
-    if (id == null) return 'Plug';
+    if (id == null) return strings.t('flow_plug_generic');
     return tapoDevices.where((d) => d.id == id).firstOrNull?.name ??
-        'Unknown plug';
+        strings.t('flow_unknown_plug');
   }
 
   /// Builds the trigger summary line, e.g.:
@@ -533,14 +534,16 @@ class _FlowCard extends StatelessWidget {
 
     switch (t.type) {
       case FlowTriggerType.batteryFallsBelow:
-        base = 'Falls below ${t.threshold}%';
+        base = strings.t('flow_falls_below_pct', {'threshold': '${t.threshold}'});
       case FlowTriggerType.batteryRisesAbove:
-        base = 'Rises above ${t.threshold}%';
+        base = strings.t('flow_rises_above_pct', {'threshold': '${t.threshold}'});
       case FlowTriggerType.tapoPlugState:
         final deviceName = _deviceName(t.tapoDeviceId);
-        final stateLabel =
-            t.tapoExpectedOn == true ? 'found OFF' : 'found ON';
-        base = 'Plug "$deviceName" $stateLabel';
+        final stateLabel = t.tapoExpectedOn == true
+            ? strings.t('flow_found_off')
+            : strings.t('flow_found_on');
+        base = strings.t('flow_plug_state_summary',
+            {'device': deviceName, 'state': stateLabel});
     }
 
     final parts = <String>[base];
@@ -549,7 +552,7 @@ class _FlowCard extends StatelessWidget {
     // battery triggers — tapoPlugState already has its own plug semantics.
     if (t.type != FlowTriggerType.tapoPlugState && t.requirePlugState) {
       final deviceName = _deviceName(t.tapoDeviceId);
-      final stateLabel = t.tapoExpectedOn == true ? 'OFF' : 'ON';
+      final stateLabel = t.tapoExpectedOn == true ? strings.t('off') : strings.t('on');
       parts.add('"$deviceName" $stateLabel');
     }
 
@@ -635,7 +638,7 @@ class _FlowCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: AppSpacing.xs),
-                    _StepCountPill(count: flow.actions.length),
+                    _StepCountPill(count: flow.actions.length, strings: strings),
                   ],
                 ),
               ),
@@ -649,8 +652,9 @@ class _FlowCard extends StatelessWidget {
 }
 
 class _StepCountPill extends StatelessWidget {
-  const _StepCountPill({required this.count});
+  const _StepCountPill({required this.count, required this.strings});
   final int count;
+  final AppStrings strings;
 
   @override
   Widget build(BuildContext context) {
@@ -669,7 +673,7 @@ class _StepCountPill extends StatelessWidget {
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.6)),
           const SizedBox(width: 3),
           Text(
-            '$count step${count == 1 ? '' : 's'}',
+            '$count ${count == 1 ? strings.t('flow_step_singular') : strings.t('flow_step_plural')}',
             style: AppTypography.labelSm.copyWith(
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha:0.8),
             ),
@@ -684,10 +688,12 @@ class _StepCountPill extends StatelessWidget {
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState({
+    required this.strings,
     required this.onAddBlank,
     required this.onAddTemplates,
   });
 
+  final AppStrings strings;
   final VoidCallback onAddBlank;
   final VoidCallback onAddTemplates;
 
@@ -705,10 +711,10 @@ class _EmptyState extends StatelessWidget {
                 color:
                     theme.colorScheme.onSurfaceVariant.withValues(alpha:0.4)),
             const SizedBox(height: AppSpacing.lg),
-            Text('No automations yet', style: AppTypography.headingMd),
+            Text(strings.t('automations_empty_title'), style: AppTypography.headingMd),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              'Build custom step sequences or start from the charging template.',
+              strings.t('automations_empty_body'),
               style: AppTypography.bodyMd,
               textAlign: TextAlign.center,
             ),
@@ -718,7 +724,7 @@ class _EmptyState extends StatelessWidget {
               child: ElevatedButton.icon(
                 onPressed: onAddTemplates,
                 icon: const Icon(Icons.auto_awesome_rounded, size: 18),
-                label: const Text('Use charging templates'),
+                label: Text(strings.t('automations_use_templates')),
               ),
             ),
             const SizedBox(height: AppSpacing.md),
@@ -727,7 +733,7 @@ class _EmptyState extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: onAddBlank,
                 icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('Build from scratch'),
+                label: Text(strings.t('automations_build_from_scratch')),
               ),
             ),
           ],

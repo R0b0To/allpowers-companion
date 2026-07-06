@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/mqtt_settings.dart';
 import '../utils/logger.dart';
 import 'secure_storage_source.dart';
@@ -7,16 +11,30 @@ import 'shared_preferences_source.dart';
 /// topic prefix, TLS, and client ID.
 ///
 /// ## Credential storage
-/// All non-sensitive fields are stored in SharedPreferences. The broker
-/// password is stored in [SecureStorageSource] (platform keystore) under the
-/// key `mqtt_password`.
+/// The broker password is stored in [SecureStorageSource] (platform
+/// keystore) under the key `mqtt_password`, kept deliberately separate from
+/// the JSON blob below — secure storage and SharedPreferences have
+/// different security guarantees and shouldn't be mixed.
 ///
-/// ## Migration from plaintext
+/// ## Non-sensitive field storage
+/// Every other field is stored as a single JSON blob under
+/// [_keySettingsJson]. Previously each field was written as its own
+/// SharedPreferences key via `Future.wait`; a process kill between two of
+/// those writes could leave the stored settings an inconsistent mix of old
+/// and new values (e.g. a new [MqttSettings.mode] paired with a stale
+/// [MqttSettings.brokerHost]). A single key removes that window.
+///
+/// ## Migration from plaintext password
 /// Versions prior to this change stored the MQTT password in SharedPreferences
 /// under the key `mqtt_password`. On first load after upgrade, if the secure-
 /// storage entry is absent but the SharedPreferences key has a value, the
 /// password is migrated automatically and the plaintext key is removed. Users
 /// do not need to re-enter their credentials.
+///
+/// ## Migration from per-field keys
+/// If [_keySettingsJson] is absent (pre-upgrade install), [load] falls back
+/// to the legacy per-field keys, builds an [MqttSettings] from them,
+/// persists it under the new key, and removes the legacy keys.
 ///
 /// ## Testing
 /// ```dart
@@ -39,19 +57,22 @@ final class SharedPrefsMqttSettingsRepository
   final SharedPreferencesSource _source;
   final SecureStorageSource _secure;
 
-  // ── SharedPreferences keys (non-sensitive fields only) ────────────────────
-  static const _keyMode = 'mqtt_mode';
-  static const _keyBrokerHost = 'mqtt_broker_host';
-  static const _keyPort = 'mqtt_port';
-  static const _keyUsername = 'mqtt_username';
-  static const _keyTopicPrefix = 'mqtt_topic_prefix';
-  static const _keyUseTls = 'mqtt_use_tls';
-  static const _keyClientId = 'mqtt_client_id';
+  // ── Current storage key (non-sensitive fields only) ───────────────────────
+  static const _keySettingsJson = 'mqtt_settings_json';
+
+  // ── Legacy per-field SharedPreferences keys (pre-migration) ───────────────
+  static const _legacyKeyMode = 'mqtt_mode';
+  static const _legacyKeyBrokerHost = 'mqtt_broker_host';
+  static const _legacyKeyPort = 'mqtt_port';
+  static const _legacyKeyUsername = 'mqtt_username';
+  static const _legacyKeyTopicPrefix = 'mqtt_topic_prefix';
+  static const _legacyKeyUseTls = 'mqtt_use_tls';
+  static const _legacyKeyClientId = 'mqtt_client_id';
 
   // ── Secure-storage key ────────────────────────────────────────────────────
   static const _secureKeyPassword = 'mqtt_password';
 
-  // ── Legacy SharedPreferences key (present before this migration) ──────────
+  // ── Legacy SharedPreferences key for the plaintext password ───────────────
   static const _legacyKeyPassword = 'mqtt_password';
 
   @override
@@ -59,11 +80,9 @@ final class SharedPrefsMqttSettingsRepository
     try {
       final prefs = await _source.prefs;
 
-      // --- Migration path ---------------------------------------------------
-      // Read from secure storage first. If absent, check whether a plaintext
-      // value exists in SharedPreferences (pre-migration install) and migrate.
-      String? password =
-          await _secure.storage.read(key: _secureKeyPassword);
+      // --- Password migration (independent of the field-bundling migration
+      // below — its own guard, unchanged from before) ------------------------
+      String? password = await _secure.storage.read(key: _secureKeyPassword);
 
       if (password == null) {
         final legacyPw = prefs.getString(_legacyKeyPassword);
@@ -80,50 +99,112 @@ final class SharedPrefsMqttSettingsRepository
       }
       // ---------------------------------------------------------------------
 
-      final modeStr = prefs.getString(_keyMode) ?? AppMode.standalone.name;
-      final mode = AppMode.values.firstWhere(
-        (m) => m.name == modeStr,
-        orElse: () => AppMode.standalone,
-      );
+      final raw = prefs.getString(_keySettingsJson);
+      if (raw != null) {
+        final j = jsonDecode(raw) as Map<String, dynamic>;
+        return _fromNonSensitiveJson(j, password: password ?? '');
+      }
 
-      return MqttSettings(
-        mode: mode,
-        brokerHost: prefs.getString(_keyBrokerHost) ?? '',
-        port: prefs.getInt(_keyPort) ?? 1883,
-        username: prefs.getString(_keyUsername) ?? '',
-        password: password ?? '',
-        topicPrefix: prefs.getString(_keyTopicPrefix) ?? 'ap/station',
-        useTls: prefs.getBool(_keyUseTls) ?? false,
-        clientId: prefs.getString(_keyClientId) ?? '',
-      );
+      return _migrateFromLegacyKeys(prefs, password: password ?? '');
     } catch (e) {
-      Log.e('MqttSettingsRepository',
-          'load failed — returning defaults', e);
+      Log.e('MqttSettingsRepository', 'load failed — returning defaults', e);
       return const MqttSettings();
     }
+  }
+
+  Future<MqttSettings> _migrateFromLegacyKeys(
+    SharedPreferences prefs, {
+    required String password,
+  }) async {
+    final hasLegacyData = prefs.containsKey(_legacyKeyMode) ||
+        prefs.containsKey(_legacyKeyBrokerHost) ||
+        prefs.containsKey(_legacyKeyPort) ||
+        prefs.containsKey(_legacyKeyUsername) ||
+        prefs.containsKey(_legacyKeyTopicPrefix) ||
+        prefs.containsKey(_legacyKeyUseTls) ||
+        prefs.containsKey(_legacyKeyClientId);
+
+    final modeStr = prefs.getString(_legacyKeyMode) ?? AppMode.standalone.name;
+    final mode = AppMode.values.firstWhere(
+      (m) => m.name == modeStr,
+      orElse: () => AppMode.standalone,
+    );
+
+    final settings = MqttSettings(
+      mode: mode,
+      brokerHost: prefs.getString(_legacyKeyBrokerHost) ?? '',
+      port: prefs.getInt(_legacyKeyPort) ?? 1883,
+      username: prefs.getString(_legacyKeyUsername) ?? '',
+      password: password,
+      topicPrefix: prefs.getString(_legacyKeyTopicPrefix) ?? 'ap/station',
+      useTls: prefs.getBool(_legacyKeyUseTls) ?? false,
+      clientId: prefs.getString(_legacyKeyClientId) ?? '',
+    );
+
+    if (hasLegacyData) {
+      Log.i('MqttSettingsRepository',
+          'Migrating legacy per-field MQTT settings to single JSON key');
+      await _saveNonSensitive(settings);
+      await Future.wait([
+        prefs.remove(_legacyKeyMode),
+        prefs.remove(_legacyKeyBrokerHost),
+        prefs.remove(_legacyKeyPort),
+        prefs.remove(_legacyKeyUsername),
+        prefs.remove(_legacyKeyTopicPrefix),
+        prefs.remove(_legacyKeyUseTls),
+        prefs.remove(_legacyKeyClientId),
+      ]);
+    }
+
+    return settings;
+  }
+
+  MqttSettings _fromNonSensitiveJson(
+    Map<String, dynamic> j, {
+    required String password,
+  }) {
+    final modeStr = j['mode'] as String? ?? AppMode.standalone.name;
+    final mode = AppMode.values.firstWhere(
+      (m) => m.name == modeStr,
+      orElse: () => AppMode.standalone,
+    );
+    return MqttSettings(
+      mode: mode,
+      brokerHost: j['brokerHost'] as String? ?? '',
+      port: (j['port'] as num?)?.toInt() ?? 1883,
+      username: j['username'] as String? ?? '',
+      password: password,
+      topicPrefix: j['topicPrefix'] as String? ?? 'ap/station',
+      useTls: j['useTls'] as bool? ?? false,
+      clientId: j['clientId'] as String? ?? '',
+    );
+  }
+
+  Map<String, dynamic> _toNonSensitiveJson(MqttSettings s) => {
+        'mode': s.mode.name,
+        'brokerHost': s.brokerHost,
+        'port': s.port,
+        'username': s.username,
+        'topicPrefix': s.topicPrefix,
+        'useTls': s.useTls,
+        'clientId': s.clientId,
+      };
+
+  Future<void> _saveNonSensitive(MqttSettings s) async {
+    final prefs = await _source.prefs;
+    await prefs.setString(
+        _keySettingsJson, jsonEncode(_toNonSensitiveJson(s)));
   }
 
   @override
   Future<void> save(MqttSettings s) async {
     try {
-      final prefs = await _source.prefs;
-
-      // Password goes to secure storage; everything else to SharedPreferences.
+      // Password goes to secure storage; everything else to the JSON blob.
       await _secure.storage.write(
         key: _secureKeyPassword,
         value: s.password,
       );
-
-      await Future.wait([
-        prefs.setString(_keyMode, s.mode.name),
-        prefs.setString(_keyBrokerHost, s.brokerHost),
-        prefs.setInt(_keyPort, s.port),
-        prefs.setString(_keyUsername, s.username),
-        // _legacyKeyPassword intentionally NOT written — it was cleared on migration.
-        prefs.setString(_keyTopicPrefix, s.topicPrefix),
-        prefs.setBool(_keyUseTls, s.useTls),
-        prefs.setString(_keyClientId, s.clientId),
-      ]);
+      await _saveNonSensitive(s);
     } catch (e) {
       Log.e('MqttSettingsRepository', 'save failed', e);
     }

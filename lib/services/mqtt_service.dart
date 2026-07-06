@@ -12,6 +12,7 @@ import '../models/mqtt_rpc.dart';
 import '../models/mqtt_settings.dart';
 import '../models/power_station_status.dart';
 import '../utils/logger.dart';
+import 'mqtt_message_router.dart';
 
 /// Manages the MQTT connection in both Gateway and Client modes.
 ///
@@ -35,6 +36,15 @@ import '../utils/logger.dart';
 ///   (status, Tapo devices, history snapshot) so a client doesn't have to
 ///   wait for the next organic state change — which may never come if the
 ///   station is just sitting idle — to receive current data.
+///
+/// ## Message parsing
+/// Topic matching and JSON decoding live in [MqttMessageRouter], a pure
+/// module with no dependency on `mqtt_client` types — see
+/// `test/services/mqtt_message_router_test.dart`. This class owns dispatch
+/// (invoking callbacks, updating `remoteStatus`) and everything connection-
+/// related. [debugHandleMessage] and [debugAwaitRpcResponse] are
+/// test-only seams that exercise the dispatch/RPC-correlation logic without
+/// a live broker — see `test/services/mqtt_service_test.dart`.
 final class MqttService extends ChangeNotifier {
   MqttServerClient? _client;
   MqttSettings _settings = const MqttSettings();
@@ -332,151 +342,101 @@ final class MqttService extends ChangeNotifier {
       final pub = event.payload as MqttPublishMessage;
       final raw =
           MqttPublishPayload.bytesToStringAsString(pub.payload.message);
-      try {
-        if (event.topic == _settings.flowsTopic) {
-          _handleFlowsSync(raw);
-          continue;
-        }
-
-        if (event.topic == _settings.tapoDevicesTopic) {
-          _handleTapoDevices(raw);
-          continue;
-        }
-
-        if (event.topic == _settings.rpcRequestTopic) {
-          unawaited(_handleRpcRequest(raw));
-          continue;
-        }
-
-        if (event.topic == _settings.rpcResponseTopic) {
-          _handleRpcResponse(raw);
-          continue;
-        }
-
-        if (event.topic == _settings.historyTopic) {
-          _handleHistoryEntry(raw);
-          continue;
-        }
-
-        if (event.topic == _settings.historySnapshotTopic) {
-          _handleHistorySnapshot(raw);
-          continue;
-        }
-
-        if (_settings.mode == AppMode.client &&
-            event.topic == _settings.statusTopic) {
-          _handleStatus(raw);
-        } else if (_settings.mode == AppMode.gateway &&
-            event.topic.startsWith(_settings.commandTopic)) {
-          _handleCommand(event.topic, raw);
-        }
-      } catch (e) {
-        Log.e('MqttService', 'Parse error [${event.topic}]', e);
-      }
+      final decoded = MqttMessageRouter.route(
+        topic: event.topic,
+        raw: raw,
+        settings: _settings,
+      );
+      _dispatch(decoded, event.topic);
     }
   }
 
-  // ── Message handlers ──────────────────────────────────────────────────────
+  /// Applies a decoded [message] to this instance's state and callbacks.
+  ///
+  /// Split out from [_onMessages] so [debugHandleMessage] can drive the
+  /// exact same dispatch logic in tests without a live broker subscription.
+  void _dispatch(MqttInboundMessage message, String topic) {
+    switch (message) {
+      case FlowsSyncMessage(:final flows):
+        Log.i('MqttService', 'Flows received (${flows.length} flow(s))');
+        onFlowsReceived?.call(flows);
 
-  void _handleFlowsSync(String raw) {
-    try {
-      final list = jsonDecode(raw) as List<dynamic>;
-      final flows = list
-          .map((j) =>
-              AutomationFlow.tryFromJson(j as Map<String, dynamic>))
-          .whereType<AutomationFlow>()
-          .toList();
-      Log.i('MqttService', 'Flows received (${flows.length} flow(s))');
-      onFlowsReceived?.call(flows);
-    } catch (e) {
-      Log.e('MqttService', 'Failed to parse flows payload', e);
+      case TapoDevicesMessage(:final devices):
+        Log.i('MqttService',
+            'Tapo devices received (${devices.length} device(s))');
+        onTapoDevicesReceived?.call(devices);
+
+      case RpcRequestMessage(:final request):
+        unawaited(_handleRpcRequest(request));
+
+      case RpcResponseMessage(:final response):
+        _handleRpcResponse(response);
+
+      case HistoryEntryMessage(:final entry):
+        onHistoryReceived?.call([entry]);
+
+      case HistorySnapshotMessage(:final entries):
+        if (entries.isNotEmpty) {
+          Log.i('MqttService',
+              'History snapshot received (${entries.length} entries)');
+          onHistoryReceived?.call(entries);
+        }
+
+      case StatusMessage(:final status, :final bleConnected):
+        _applyRemoteStatus(status, bleConnected);
+
+      case CommandMessage(:final outlet, :final value):
+        Log.i('MqttService', 'CMD received: $outlet=$value');
+        onCommand?.call(outlet, value);
+
+      case UnrecognizedMessage():
+        break;
+
+      case MalformedMessage(:final error):
+        Log.e('MqttService', 'Parse error [$topic]', error);
     }
   }
 
-  void _handleHistoryEntry(String raw) {
-    try {
-      final entry = AutomationHistoryEntry.tryFromJson(
-          jsonDecode(raw) as Map<String, dynamic>);
-      if (entry != null) onHistoryReceived?.call([entry]);
-    } catch (e) {
-      Log.e('MqttService', 'Failed to parse history entry', e);
-    }
-  }
-
-  void _handleHistorySnapshot(String raw) {
-    try {
-      final list = jsonDecode(raw) as List<dynamic>;
-      final entries = list
-          .map((j) => AutomationHistoryEntry.tryFromJson(
-              j as Map<String, dynamic>))
-          .whereType<AutomationHistoryEntry>()
-          .toList();
-      Log.i('MqttService',
-          'History snapshot received (${entries.length} entries)');
-      if (entries.isNotEmpty) onHistoryReceived?.call(entries);
-    } catch (e) {
-      Log.e('MqttService', 'Failed to parse history snapshot', e);
-    }
-  }
-
-  void _handleStatus(String raw) {
-    final j = jsonDecode(raw) as Map<String, dynamic>;
-    final newStatus = PowerStationStatus.validated(
-      batteryLevel: (j['batteryLevel'] as num? ?? 0).toInt(),
-      inputWatts: (j['inputWatts'] as num? ?? 0).toInt(),
-      outputWatts: (j['outputWatts'] as num? ?? 0).toInt(),
-      minutesRemaining: (j['minutesRemaining'] as num? ?? 0).toInt(),
-      isUsbOn: j['isUsbOn'] as bool? ?? false,
-      isAcOn: j['isAcOn'] as bool? ?? false,
-      isDcOn: j['isDcOn'] as bool? ?? false,
-    );
-    final bleConn = j['bleConnected'] as bool? ?? false;
-    if (newStatus != _remoteStatus || bleConn != _bleConnectedRemote) {
-      _remoteStatus = newStatus;
-      _bleConnectedRemote = bleConn;
+  /// Updates [_remoteStatus]/[_bleConnectedRemote] and notifies listeners
+  /// only when something actually changed — mirrors the change-detection
+  /// [BleService] uses for the same reason: avoid redundant rebuilds on
+  /// every retained-message replay.
+  void _applyRemoteStatus(PowerStationStatus status, bool bleConnected) {
+    if (status != _remoteStatus || bleConnected != _bleConnectedRemote) {
+      _remoteStatus = status;
+      _bleConnectedRemote = bleConnected;
       _lastRemoteUpdate = DateTime.now();
       notifyListeners();
     }
   }
 
-  void _handleTapoDevices(String raw) {
-    try {
-      final list = jsonDecode(raw) as List<dynamic>;
-      final devices = list
-          .map((j) => _tapoDeviceFromJson(j as Map<String, dynamic>))
-          .whereType<TapoDevice>()
-          .toList();
-      Log.i('MqttService',
-          'Tapo devices received (${devices.length} device(s))');
-      onTapoDevicesReceived?.call(devices);
-    } catch (e) {
-      Log.e('MqttService', 'Failed to parse tapo/devices', e);
-    }
+  // ── Test-only seams ────────────────────────────────────────────────────
+  //
+  // MqttService's real message path runs through mqtt_client's stream
+  // subscription, which needs a live broker connection to exercise end to
+  // end. These two hooks let tests drive the dispatch and RPC-correlation
+  // logic directly — the exact code [_onMessages]/[call] would run — without
+  // needing a real connection. They change no production behavior; nothing
+  // outside a test calls them.
+
+  /// Runs [raw] through [MqttMessageRouter] and this instance's normal
+  /// dispatch logic, exactly as a real message arriving on [topic] would.
+  @visibleForTesting
+  void debugHandleMessage(String topic, String raw) {
+    final decoded =
+        MqttMessageRouter.route(topic: topic, raw: raw, settings: _settings);
+    _dispatch(decoded, topic);
   }
 
-  static TapoDevice? _tapoDeviceFromJson(Map<String, dynamic> j) {
-    try {
-      return TapoDevice(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        ip: j['ip'] as String,
-        email: j['email'] as String,
-        password: j['password'] as String,
-        isOnline: j['isOnline'] as bool? ?? false,
-        isOn: j['isOn'] as bool? ?? false,
-        model: j['model'] as String? ?? '',
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  void _handleCommand(String topic, String raw) {
-    final outlet = topic.split('/').last;
-    final j = jsonDecode(raw) as Map<String, dynamic>;
-    final value = j['value'] as bool? ?? false;
-    Log.i('MqttService', 'CMD received: $outlet=$value');
-    onCommand?.call(outlet, value);
+  /// Registers a pending RPC completer under [id], as [call] would after a
+  /// real publish, so a test can feed a matching response through
+  /// [debugHandleMessage] on the RPC-response topic and assert on the
+  /// resulting [RpcResponse].
+  @visibleForTesting
+  Future<RpcResponse> debugAwaitRpcResponse(String id) {
+    final completer = Completer<RpcResponse>();
+    _rpcPending[id] = completer;
+    return completer.future;
   }
 
   // ── Publish ───────────────────────────────────────────────────────────────
@@ -522,20 +482,13 @@ final class MqttService extends ChangeNotifier {
 
   // ── RPC ───────────────────────────────────────────────────────────────────
 
-  Future<void> _handleRpcRequest(String raw) async {
-    RpcRequest req;
-    try {
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      req = RpcRequest(
-        id: j['id'] as String,
-        method: j['method'] as String,
-        params: (j['params'] as Map<String, dynamic>?) ?? {},
-      );
-    } catch (e) {
-      Log.e('MqttService', 'Malformed RPC request: $raw', e);
-      return;
-    }
-
+  /// Executes an already-decoded RPC [req] via [onRpcRequest] and publishes
+  /// the result. JSON parsing of the raw MQTT payload now happens in
+  /// [MqttMessageRouter] before this is called — a malformed request never
+  /// reaches here at all; it's logged generically by [_dispatch]'s
+  /// [MalformedMessage] case instead of the old RPC-specific
+  /// "Malformed RPC request" message.
+  Future<void> _handleRpcRequest(RpcRequest req) async {
     dynamic result;
     String? error;
 
@@ -560,22 +513,17 @@ final class MqttService extends ChangeNotifier {
     );
   }
 
-  void _handleRpcResponse(String raw) {
-    try {
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      final resp = RpcResponse.tryFromJson(j);
-      if (resp == null) return;
-
-      final completer = _rpcPending.remove(resp.id);
-      if (completer == null) {
-        Log.w('MqttService', 'RPC response for unknown id: ${resp.id}');
-        return;
-      }
-      if (completer.isCompleted) return;
-      completer.complete(resp);
-    } catch (e) {
-      Log.e('MqttService', 'Failed to parse RPC response', e);
+  /// Completes the pending RPC call (if any) matching an already-decoded
+  /// [resp]. Parsing happens in [MqttMessageRouter]; a malformed payload
+  /// never reaches here.
+  void _handleRpcResponse(RpcResponse resp) {
+    final completer = _rpcPending.remove(resp.id);
+    if (completer == null) {
+      Log.w('MqttService', 'RPC response for unknown id: ${resp.id}');
+      return;
     }
+    if (completer.isCompleted) return;
+    completer.complete(resp);
   }
 
   /// Sends an RPC request to the gateway and awaits its response.
