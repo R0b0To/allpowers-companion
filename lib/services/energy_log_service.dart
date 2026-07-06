@@ -8,18 +8,28 @@ import '../repositories/energy_log_repository.dart';
 ///
 /// ## Throttling
 /// [BleService] can emit a status update multiple times per second; storing
-/// every one would bloat SharedPreferences within hours. Instead, a sample
-/// is only appended once at least [interval] has elapsed since the
-/// *previously stored* sample's timestamp. Because this is based on stored
-/// data rather than a wall-clock [Timer], it survives app restarts
-/// correctly: relaunching after being closed for a day doesn't backfill —
-/// it just waits for the next [interval] to elapse from the last real
-/// sample before resuming.
+/// every one would bloat storage within hours. Instead, a sample is only
+/// appended once at least [interval] has elapsed since the *previously
+/// stored* sample's timestamp. Because this is based on stored data rather
+/// than a wall-clock [Timer], it survives app restarts correctly:
+/// relaunching after being closed for a day doesn't backfill — it just
+/// waits for the next [interval] to elapse from the last real sample
+/// before resuming.
 ///
 /// ## Storage model
 /// Entries are kept oldest-first in memory (convenient for charting) and
-/// persisted via [EnergyLogRepository], which caps the stored count at
-/// [EnergyLogRepository.maxEntries].
+/// persisted one row at a time via [EnergyLogRepository.appendEntry], which
+/// internally caps the on-disk count at [EnergyLogRepository.maxEntries].
+///
+/// The in-memory [_entries] list is capped at the same limit by this class
+/// directly (see [recordSample]) — this used to happen implicitly, as a
+/// side effect of the old SharedPreferences-backed repository rewriting
+/// (and truncating) the *entire* list on every save. Now that
+/// [EnergyLogRepository.appendEntry] only appends a single row rather than
+/// rewriting everything, that implicit truncation no longer happens, so
+/// this class enforces the cap explicitly instead. Without this, a long-
+/// running app session would grow `_entries` in memory indefinitely even
+/// though the on-disk copy stayed capped.
 final class EnergyLogService extends ChangeNotifier {
   EnergyLogService(
     this._repository, {
@@ -66,30 +76,27 @@ final class EnergyLogService extends ChangeNotifier {
       isDcOn: status.isDcOn,
     );
 
-    _entries = [..._entries, entry];
+    final updated = [..._entries, entry];
+    // Cap the in-memory list to match the on-disk cap — see class doc.
+    _entries = updated.length > EnergyLogRepository.maxEntries
+        ? updated.sublist(updated.length - EnergyLogRepository.maxEntries)
+        : updated;
     notifyListeners();
-    await _repository.saveLog(_entries);
+    await _repository.appendEntry(entry);
   }
 
   Future<void> clear() async {
     _entries = const [];
     notifyListeners();
-    await _repository.saveLog(_entries);
+    await _repository.clearLog();
   }
 
   /// Returns entries no older than [duration] from now.
   ///
-  /// FIX: previously returned `_entries.sublist(idx)`, which in Dart is a
-  /// fresh growable List but is filled by copying the *current* element
-  /// references in the *current* range. The bug this fixes isn't aliasing
-  /// of the backing array (sublist always copies), but call-site lifetime:
-  /// callers (e.g. EnergyTab._entriesAndStats) compare list *identity*
-  /// across rebuilds to decide whether to recompute cached stats. Returning
-  /// `List.unmodifiable(...)` here makes the immutability contract explicit
-  /// and prevents any future caller from mutating what looks like a fresh
-  /// list but is logically meant to be a read-only view, while keeping the
-  /// identity-based caching in EnergyTab correct (a new sample always
-  /// produces a new List instance here).
+  /// Returns `List.unmodifiable(...)` so the immutability contract is
+  /// explicit and callers (e.g. `EnergyTab._entriesAndStats`) can safely
+  /// compare list *identity* across rebuilds to decide whether to recompute
+  /// cached stats — a new sample always produces a new List instance here.
   List<EnergyLogEntry> since(Duration duration) {
     if (_entries.isEmpty) return const [];
     final cutoff = DateTime.now().toUtc().subtract(duration);

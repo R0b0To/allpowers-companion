@@ -4,11 +4,13 @@
 /// interval by [EnergyLogService] — never on every raw BLE packet — to keep
 /// long-term storage bounded.
 ///
-/// Uses a compact pipe-delimited serialization rather than JSON
-/// ([AutomationHistoryEntry]'s approach) because the energy log accumulates
-/// far more entries over time (potentially tens of thousands across weeks),
-/// and the per-entry overhead of JSON keys adds up quickly in
-/// SharedPreferences.
+/// ## Compact format
+/// [toCompact]/[tryFromCompact] serialize to a pipe-delimited string
+/// (`epochMs|battery|inputW|outputW|socketMask`). The primary store is now
+/// SQLite (see [EnergyLogRepository]), but this compact format is still
+/// used to read entries out of the legacy SharedPreferences store during
+/// the one-time migration a pre-SQLite install goes through on first load
+/// — see `SqliteEnergyLogRepository._migrateFromSharedPreferencesIfPresent`.
 final class EnergyLogEntry {
   const EnergyLogEntry({
     required this.timestamp,
@@ -42,8 +44,8 @@ final class EnergyLogEntry {
   }
 
   /// Parses a single compact line, returning null on any malformed data so
-  /// one corrupt line can't take down the whole log (same defensive pattern
-  /// as [AutomationHistoryEntry.tryFromJson]).
+  /// one corrupt line can't take down the whole migration (same defensive
+  /// pattern as [AutomationHistoryEntry.tryFromJson]).
   static EnergyLogEntry? tryFromCompact(String line) {
     try {
       final parts = line.split('|');
