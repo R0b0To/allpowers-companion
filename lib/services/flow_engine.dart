@@ -217,25 +217,28 @@ final class FlowEngine {
         await Future<void>.delayed(Duration(seconds: action.waitSeconds));
 
       case FlowActionType.setBleOutlet:
-        switch (action.outlet) {
-          case BleOutlet.usb:
-            await _ble.setUsb(action.outletOn);
-          case BleOutlet.ac:
-            await _ble.setAc(action.outletOn);
-          case BleOutlet.dc:
-            await _ble.setDc(action.outletOn);
-        }
-        Log.d('FlowEngine',
-            '${action.outlet.name} → ${action.outletOn ? "ON" : "OFF"}');
-        await _history.addEntry(AutomationHistoryEntry(
-          timestamp: DateTime.now(),
-          action: HistoryAction.outletToggled,
-          batteryLevel: triggerLevel,
-          success: true,
-          method: ActivationMethod.bleOutlet,
-          flowName: flowName,
-          deviceName: action.outlet.name.toUpperCase(),
-        ));
+  final confirmed = switch (action.outlet) {
+    BleOutlet.usb => await _ble.setUsbConfirmed(action.outletOn),
+    BleOutlet.ac => await _ble.setAcConfirmed(action.outletOn),
+    BleOutlet.dc => await _ble.setDcConfirmed(action.outletOn),
+  };
+  Log.d('FlowEngine',
+      '${action.outlet.name} → ${action.outletOn ? "ON" : "OFF"} '
+      '(${confirmed ? "confirmed" : "NOT confirmed"})');
+  await _history.addEntry(AutomationHistoryEntry(
+    timestamp: DateTime.now(),
+    action: HistoryAction.outletToggled,
+    batteryLevel: triggerLevel,
+    success: confirmed,
+    method: ActivationMethod.bleOutlet,
+    flowName: flowName,
+    deviceName: action.outlet.name.toUpperCase(),
+  ));
+  if (!confirmed) {
+    throw StateError(
+        'Outlet ${action.outlet.name} was not confirmed by the station — '
+        'aborting "$flowName"');
+  }
 
       case FlowActionType.fireWebhook:
         if (action.webhookUrl.isEmpty) {
@@ -258,49 +261,49 @@ final class FlowEngine {
     }
   }
 
-  Future<void> _executeTapoAction(
-    FlowAction action,
-    int triggerLevel,
-    String flowName,
-  ) async {
-    if (action.tapoDeviceId.isEmpty) {
-      Log.w(
-        'FlowEngine',
+Future<void> _executeTapoAction(
+  FlowAction action,
+  int triggerLevel,
+  String flowName,
+) async {
+  if (action.tapoDeviceId.isEmpty) {
+    Log.w('FlowEngine',
         'controlTapo: no device ID set on action in "$flowName" — skipping. '
-        'Open the flow editor and select a Tapo device.',
-      );
-      return;
-    }
-
-    final device = _tapoDevices.getDevice(action.tapoDeviceId);
-    if (device == null) {
-      Log.w('FlowEngine',
-          'controlTapo: device ${action.tapoDeviceId} not found');
-      return;
-    }
-
-    _tapo.resetSession(ip: device.ip, email: device.email);
-    final ok = await _tapo.setOn(
-      ip: device.ip,
-      email: device.email,
-      password: device.password,
-      on: action.tapoOn,
-    );
-    Log.i(
-      'FlowEngine',
-      'Tapo "${device.name}" ${action.tapoOn ? "ON" : "OFF"}: '
-      '${ok ? "OK" : "FAILED"}',
-    );
-    await _history.addEntry(AutomationHistoryEntry(
-      timestamp: DateTime.now(),
-      action: action.tapoOn ? HistoryAction.tapoOn : HistoryAction.tapoOff,
-      batteryLevel: triggerLevel,
-      success: ok,
-      method: ActivationMethod.localTapo,
-      flowName: flowName,
-      deviceName: device.name,
-    ));
+        'Open the flow editor and select a Tapo device.');
+    return;
   }
+
+  final device = _tapoDevices.getDevice(action.tapoDeviceId);
+  if (device == null) {
+    Log.w('FlowEngine', 'controlTapo: device ${action.tapoDeviceId} not found');
+    return;
+  }
+
+  _tapo.resetSession(ip: device.ip, email: device.email);
+  final confirmed = await _tapo.setOnConfirmed(
+    ip: device.ip,
+    email: device.email,
+    password: device.password,
+    on: action.tapoOn,
+  );
+  Log.i('FlowEngine',
+      'Tapo "${device.name}" ${action.tapoOn ? "ON" : "OFF"}: '
+      '${confirmed ? "confirmed" : "NOT confirmed"}');
+  await _history.addEntry(AutomationHistoryEntry(
+    timestamp: DateTime.now(),
+    action: action.tapoOn ? HistoryAction.tapoOn : HistoryAction.tapoOff,
+    batteryLevel: triggerLevel,
+    success: confirmed,
+    method: ActivationMethod.localTapo,
+    flowName: flowName,
+    deviceName: device.name,
+  ));
+  if (!confirmed) {
+    throw StateError(
+        'Tapo "${device.name}" did not confirm '
+        '${action.tapoOn ? "ON" : "OFF"} — aborting "$flowName"');
+  }
+}
 
   // ── Persistence helpers ────────────────────────────────────────────────────
 

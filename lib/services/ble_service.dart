@@ -35,6 +35,67 @@ class BleService extends ChangeNotifier {
   /// Only called when [status] actually changes.
   void Function(PowerStationStatus status)? onStatus;
 
+  // ── Confirmed outlet commands ──────────────────────────────────────────
+
+/// Set while a [_setSocketConfirmed] call is awaiting confirmation from a
+/// real status packet — checked against the packet's raw socket mask,
+/// bypassing the manual-override suppression, since confirmation
+/// specifically needs the station's real reported state, not the
+/// optimistic local one the UI shows during [manualOverrideWindow].
+Completer<bool>? _pendingOutletCompleter;
+int? _pendingOutletDesiredMask;
+
+/// Like [setUsb]/[setAc]/[setDc], but waits for the station's own status
+/// broadcast to confirm the change before returning, instead of assuming
+/// success from a bare characteristic write. Used by [FlowEngine] so an
+/// automation step isn't treated as done until it's actually verified.
+Future<bool> setUsbConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
+    _setSocketConfirmed(usb: enable, timeout: timeout);
+Future<bool> setAcConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
+    _setSocketConfirmed(ac: enable, timeout: timeout);
+Future<bool> setDcConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
+    _setSocketConfirmed(dc: enable, timeout: timeout);
+
+Future<bool> _setSocketConfirmed({
+  bool? usb,
+  bool? ac,
+  bool? dc,
+  required Duration timeout,
+}) async {
+  if (!isConnected) return false;
+
+  // Mirror _setSocket's own merge logic to compute the exact mask it will
+  // write, computed *before* calling it so there's no race with status
+  // being mutated underneath us.
+  final desiredUsb = usb ?? status.isUsbOn;
+  final desiredAc = ac ?? status.isAcOn;
+  final desiredDc = dc ?? status.isDcOn;
+  var desiredMask = 0;
+  if (desiredUsb) desiredMask |= BleConstants.usbMask;
+  if (desiredAc) desiredMask |= BleConstants.acMask;
+  if (desiredDc) desiredMask |= BleConstants.dcMask;
+
+  final completer = Completer<bool>();
+  _pendingOutletCompleter = completer;
+  _pendingOutletDesiredMask = desiredMask;
+
+  await _setSocket(usb: usb, ac: ac, dc: dc);
+
+  try {
+    return await completer.future.timeout(timeout, onTimeout: () {
+      Log.w('BleService',
+          'Outlet command not confirmed within ${timeout.inSeconds}s '
+          '(desired mask: 0x${desiredMask.toRadixString(16)})');
+      return false;
+    });
+  } finally {
+    if (identical(_pendingOutletCompleter, completer)) {
+      _pendingOutletCompleter = null;
+      _pendingOutletDesiredMask = null;
+    }
+  }
+}
+
   // ── Private ────────────────────────────────────────────────────────────────
   BluetoothCharacteristic? _readCharacteristic;
   BluetoothCharacteristic? _writeCharacteristic;
@@ -239,11 +300,14 @@ Future<void> resume() async {
     });
   }
 
-  void _handleDisconnect({required bool retry}) {
+ void _handleDisconnect({required bool retry}) {
   _notifySubscription?.cancel();
   _notifySubscription = null;
   isConnected = false;
   lastPacketTime = null;
+  if (_pendingOutletCompleter?.isCompleted == false) {
+    _pendingOutletCompleter!.complete(false);
+  }
   _stopWatchdog();
   _stopKeepalive();
   isAutoConnecting = false;
@@ -383,17 +447,25 @@ Duration _backoffDelay(int attempt) {
         lastPacketTime = DateTime.now();
 
       case StatusPacket packet:
-        lastPacketTime = DateTime.now();
-        final newStatus = StatusPacketParser.applyToStatus(
-          current: status,
-          packet: packet,
-          suppressSocketState: _inManualOverrideWindow,
-        );
-        if (newStatus != status) {
-          status = newStatus;
-          notifyListeners();
-          onStatus?.call(status);
-        }
+  lastPacketTime = DateTime.now();
+
+  final pendingMask = _pendingOutletDesiredMask;
+  if (pendingMask != null &&
+      packet.socketMask == pendingMask &&
+      _pendingOutletCompleter?.isCompleted == false) {
+    _pendingOutletCompleter!.complete(true);
+  }
+
+  final newStatus = StatusPacketParser.applyToStatus(
+    current: status,
+    packet: packet,
+    suppressSocketState: _inManualOverrideWindow,
+  );
+  if (newStatus != status) {
+    status = newStatus;
+    notifyListeners();
+    onStatus?.call(status);
+  }
     }
   }
 

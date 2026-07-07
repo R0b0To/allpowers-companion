@@ -40,6 +40,8 @@ final class TapoService {
   TapoService({TapoHttpTransport? transport})
       : _transport = transport ?? HttpClientTapoTransport();
 
+      
+
   final TapoHttpTransport _transport;
 
   /// Insertion order is LRU order: oldest (least-recently-used) entries are
@@ -200,6 +202,35 @@ final class TapoService {
     }
     return ok ?? false;
   }
+
+  /// Sets the plug's power state and confirms it actually took effect by
+/// reading device info back, rather than trusting the command's bare
+/// acknowledgement. Some firmware acks a `set_device_info` call it
+/// couldn't fully apply (e.g. a relay fault); flows chain steps that
+/// depend on this device really being in the state the next step assumes.
+Future<bool> setOnConfirmed({
+  required String ip,
+  required String email,
+  required String password,
+  required bool on,
+}) async {
+  final commandOk = await setOn(ip: ip, email: email, password: password, on: on);
+  if (!commandOk) return false;
+
+  for (var attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+    }
+    final info = await getDeviceInfo(ip: ip, email: email, password: password);
+    final reportedOn = info?['device_on'] as bool?;
+    if (reportedOn == on) return true;
+  }
+
+  Log.w('TapoService',
+      'Plug $ip did not confirm state change to ${on ? "ON" : "OFF"} '
+      'after command succeeded');
+  return false;
+}
 
   void dispose() {
     if (_disposed) return;
@@ -438,4 +469,8 @@ final class _TapoSession {
   Future<void> setDeviceStatus(bool on) async {
     await _request('set_device_info', {'device_on': on});
   }
+
+
+
+  
 }
