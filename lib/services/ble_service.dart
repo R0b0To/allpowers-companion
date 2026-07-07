@@ -76,11 +76,56 @@ class BleService extends ChangeNotifier {
       }
     }
   }
+bool _paused = false;
 
+/// Suspends auto-connect/reconnect and disconnects if currently connected,
+/// without forgetting the saved device. Must be called when this phone
+/// switches to client mode — otherwise it keeps contending with the
+/// gateway phone for the station's single BLE connection slot in the
+/// background, which is enough on its own to destabilize the gateway's
+/// real connection.
+Future<void> pause() async {
+  if (_paused) return;
+  _paused = true;
+  _reconnectAttempts = 0;
+  _stopWatchdog();
+  _stopKeepalive();
+  _connectionSubscription?.cancel();
+  _connectionSubscription = null;
+  _notifySubscription?.cancel();
+  _notifySubscription = null;
+  final device = connectedDevice ?? _pendingAutoConnectDevice;
+  if (device != null) {
+    try {
+      await device.disconnect();
+    } catch (_) {}
+  }
+  connectedDevice = null;
+  isConnected = false;
+  isAutoConnecting = false;
+  lastPacketTime = null;
+  _readCharacteristic = null;
+  _writeCharacteristic = null;
+  notifyListeners();
+  Log.i('BleService', 'Paused (client mode)');
+}
+
+/// Resumes normal auto-connect behavior after [pause]. No-op if not paused.
+Future<void> resume() async {
+  if (!_paused) return;
+  _paused = false;
+  Log.i('BleService', 'Resumed');
+  if (_savedDeviceId != null && blueAdapterState == BluetoothAdapterState.on) {
+    isAutoConnecting = true;
+    notifyListeners();
+    unawaited(_autoConnect(_savedDeviceId!));
+  }
+}
   void _onAdapterState(BluetoothAdapterState state) {
     if (state == blueAdapterState) return;
     blueAdapterState = state;
     notifyListeners();
+    if (_paused) return; 
     if (state == BluetoothAdapterState.on) {
       if (_savedDeviceId != null && !isConnected && !isAutoConnecting) {
         isAutoConnecting = true;
@@ -205,7 +250,7 @@ class BleService extends ChangeNotifier {
   _readCharacteristic = null;
   _writeCharacteristic = null;
   notifyListeners();
-    if (retry &&
+    if (retry && !_paused && 
         _savedDeviceId != null &&
         blueAdapterState == BluetoothAdapterState.on) {
       _reconnectAttempts++;

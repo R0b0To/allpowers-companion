@@ -135,6 +135,9 @@ final class AppCoordinator extends ChangeNotifier {
 
     await _flowEngine.init(flows);
     await ble.init();
+    if (mqttSettings.mode == AppMode.client) {
+  await ble.pause();   // ← don't hold a BLE link in client mode
+}
 
     mqtt.onCommand = _onMqttCommand;
     mqtt.onFlowsReceived = _onMqttFlowsReceived;
@@ -389,8 +392,10 @@ final class AppCoordinator extends ChangeNotifier {
     await mqtt.configure(updated);
 
     if (!wasClient && nowClient) {
+      await ble.pause();  
       await ForegroundService.stop();
     } else if (wasClient && !nowClient) {
+      await ble.resume();   
       tapoDevices.resumeLocalPolling();
       await ForegroundService.start();
       await ForegroundService.requestBatteryOptimizationExemption();

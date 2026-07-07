@@ -402,13 +402,18 @@ final class MqttService extends ChangeNotifier {
   /// [BleService] uses for the same reason: avoid redundant rebuilds on
   /// every retained-message replay.
   void _applyRemoteStatus(PowerStationStatus status, bool bleConnected) {
-    if (status != _remoteStatus || bleConnected != _bleConnectedRemote) {
-      _remoteStatus = status;
-      _bleConnectedRemote = bleConnected;
-      _lastRemoteUpdate = DateTime.now();
-      notifyListeners();
-    }
+  _lastRemoteUpdate = DateTime.now();
+
+  final changed = status != _remoteStatus || bleConnected != _bleConnectedRemote;
+  if (changed) {
+    _remoteStatus = status;
+    _bleConnectedRemote = bleConnected;
   }
+
+  // Notify on every message so lastRemoteUpdate changes propagate to the
+  // UI (LastUpdateIndicator), not only when the underlying data changed.
+  notifyListeners();
+}
 
   // ── Test-only seams ────────────────────────────────────────────────────
   //
