@@ -130,16 +130,6 @@ final class AppCoordinator extends ChangeNotifier {
     history.addListener(_onHistoryChanged);
 
     await energyLog.init();
-
-    // FIX: the listener must be attached *before* tapoDevices.init() kicks
-    // off its first poll. init() starts an unawaited poll cycle immediately;
-    // previously the listener was attached *after* init()/flowEngine.init()/
-    // ble.init() (the latter can block for several seconds during BLE
-    // auto-connect), so the very first Tapo poll — offline → online, first
-    // real on/off state — routinely completed and called notifyListeners()
-    // before anything was listening. In gateway mode that meant the first
-    // real plug state never reached MQTT, and any flow gated on that plug's
-    // initial state never got evaluated either.
     tapoDevices.addListener(_onTapoDevicesChanged);
     await tapoDevices.init();
 
@@ -213,7 +203,7 @@ final class AppCoordinator extends ChangeNotifier {
       if (stateChanged ||
           _lastMqttPublishTime == null ||
           now.difference(_lastMqttPublishTime!).inSeconds >= 5) {
-        mqtt.publishStatus(status, bleConnected: true);
+        mqtt.publishStatus(status, bleConnected: ble.isConnected && !ble.isStale);
         _lastMqttPublishTime = now;
         _lastAcState = status.isAcOn;
         _lastDcState = status.isDcOn;
@@ -306,7 +296,7 @@ final class AppCoordinator extends ChangeNotifier {
     _lastAcState = null;
     _lastDcState = null;
     _lastUsbState = null;
-    mqtt.publishStatus(ble.status, bleConnected: ble.isConnected);
+    mqtt.publishStatus(ble.status, bleConnected: ble.isConnected && !ble.isStale,);
     _publishTapoDevices();
     mqtt.publishHistorySnapshot(history.entries);
   }

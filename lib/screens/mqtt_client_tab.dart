@@ -5,6 +5,7 @@ import '../l10n/app_strings.dart';
 import '../models/power_station_status.dart';
 import '../services/mqtt_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/last_update_indicator.dart';
 import '../widgets/outlet_controls_row.dart';
 import '../widgets/station_battery_ring.dart';
 import '../widgets/station_metrics_row.dart';
@@ -357,11 +358,7 @@ class _RemoteHeader extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        if (mqtt.lastRemoteUpdate != null)
-          Text(
-            _formatLastUpdate(),
-            style: AppTypography.labelSm,
-          ),
+        LastUpdateIndicator(lastUpdate: mqtt.lastRemoteUpdate),
       ],
     );
   }

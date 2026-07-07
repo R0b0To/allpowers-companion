@@ -6,6 +6,7 @@ import '../l10n/app_strings.dart';
 import '../models/power_station_status.dart';
 import '../services/ble_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/last_update_indicator.dart';
 import '../widgets/outlet_controls_row.dart';
 import '../widgets/station_battery_ring.dart';
 import '../widgets/station_metrics_row.dart';
@@ -442,11 +443,12 @@ class _ConnectedView extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _ConnectionHeader(
-                  deviceName: deviceName,
-                  strings: strings,
-                  onForget: ble.forgetDevice,
-                ),
+_ConnectionHeader(
+  deviceName: deviceName,
+  strings: strings,
+  onForget: ble.forgetDevice,
+  ble: ble,
+),
                 const SizedBox(height: AppSpacing.xxl),
                 StationBatteryRing(status: status),
                 const SizedBox(height: AppSpacing.xxl),
@@ -468,11 +470,13 @@ class _ConnectionHeader extends StatelessWidget {
     required this.deviceName,
     required this.strings,
     required this.onForget,
+    required this.ble,
   });
 
   final String deviceName;
   final AppStrings strings;
   final VoidCallback onForget;
+  final BleService ble;
 
   @override
   Widget build(BuildContext context) {
@@ -495,6 +499,8 @@ class _ConnectionHeader extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ),
+        LastUpdateIndicator(lastUpdate: ble.lastPacketTime),
+        const SizedBox(width: AppSpacing.sm),
         IconButton(
           onPressed: onForget,
           tooltip: strings.t('forget'),

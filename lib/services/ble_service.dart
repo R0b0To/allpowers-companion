@@ -26,6 +26,11 @@ class BleService extends ChangeNotifier {
   PowerStationStatus status = const PowerStationStatus();
   BluetoothAdapterState blueAdapterState = BluetoothAdapterState.unknown;
   String? lastError;
+  bool get isStale =>
+    isConnected &&
+    (lastPacketTime == null ||
+        DateTime.now().difference(lastPacketTime!) >
+            BleConstants.staleConnectionThreshold);
 
   /// Only called when [status] actually changes.
   void Function(PowerStationStatus status)? onStatus;
@@ -190,15 +195,16 @@ class BleService extends ChangeNotifier {
   }
 
   void _handleDisconnect({required bool retry}) {
-    _notifySubscription?.cancel();
-    _notifySubscription = null;
-    isConnected = false;
-    _stopWatchdog();
-    _stopKeepalive();
-    isAutoConnecting = false;
-    _readCharacteristic = null;
-    _writeCharacteristic = null;
-    notifyListeners();
+  _notifySubscription?.cancel();
+  _notifySubscription = null;
+  isConnected = false;
+  lastPacketTime = null;
+  _stopWatchdog();
+  _stopKeepalive();
+  isAutoConnecting = false;
+  _readCharacteristic = null;
+  _writeCharacteristic = null;
+  notifyListeners();
     if (retry &&
         _savedDeviceId != null &&
         blueAdapterState == BluetoothAdapterState.on) {
@@ -438,20 +444,22 @@ Duration _backoffDelay(int attempt) {
     _keepaliveTimer = null;
   }
 
-  /// Disconnects the (apparently stuck) device. The existing
-  /// `connectionState` listener already handles the resulting
-  /// `disconnected` event via `_handleDisconnect(retry: true)`, which
-  /// schedules a normal auto-reconnect — so this just kicks the OS into
-  /// noticing what the watchdog already knows.
-  Future<void> _forceReconnect() async {
-    final device = connectedDevice;
-    if (device == null) return;
-    try {
-      await device.disconnect();
-    } catch (e) {
-      Log.w('BleService', 'Watchdog force-disconnect failed: $e');
-    }
+
+Future<void> _forceReconnect() async {
+  final device = connectedDevice;
+  if (device == null) return;
+  try {
+    await device.disconnect();
+  } catch (e) {
+    Log.w('BleService', 'Watchdog force-disconnect failed: $e');
   }
+
+  await Future<void>.delayed(const Duration(seconds: 3));
+  if (isConnected) {
+    Log.w('BleService', 'No disconnected event after forced disconnect — recovering manually');
+    _handleDisconnect(retry: true);
+  }
+}
 
 
   // ── Dispose ────────────────────────────────────────────────────────────────
