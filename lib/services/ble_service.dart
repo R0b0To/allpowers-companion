@@ -37,64 +37,76 @@ class BleService extends ChangeNotifier {
 
   // ── Confirmed outlet commands ──────────────────────────────────────────
 
-/// Set while a [_setSocketConfirmed] call is awaiting confirmation from a
-/// real status packet — checked against the packet's raw socket mask,
-/// bypassing the manual-override suppression, since confirmation
-/// specifically needs the station's real reported state, not the
-/// optimistic local one the UI shows during [manualOverrideWindow].
-Completer<bool>? _pendingOutletCompleter;
-int? _pendingOutletDesiredMask;
+  /// Pending outlet-command confirmations, keyed by the exact socket mask
+  /// each command expects to see echoed back in a real status packet.
+  ///
+  /// A list rather than a single slot: two commands (a flow action and a
+  /// manual toggle, say) can legitimately overlap in flight. A single-slot
+  /// completer let the second command silently overwrite the first one's
+  /// pending reference, so the first always timed out — right or wrong.
+  final List<(Completer<bool>, int)> _pendingOutletConfirmations = [];
 
-/// Like [setUsb]/[setAc]/[setDc], but waits for the station's own status
-/// broadcast to confirm the change before returning, instead of assuming
-/// success from a bare characteristic write. Used by [FlowEngine] so an
-/// automation step isn't treated as done until it's actually verified.
-Future<bool> setUsbConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
-    _setSocketConfirmed(usb: enable, timeout: timeout);
-Future<bool> setAcConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
-    _setSocketConfirmed(ac: enable, timeout: timeout);
-Future<bool> setDcConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
-    _setSocketConfirmed(dc: enable, timeout: timeout);
+  /// Like [setUsb]/[setAc]/[setDc], but waits for the station's own status
+  /// broadcast to confirm the change before returning, instead of assuming
+  /// success from a bare characteristic write. Used by [FlowEngine] (and by
+  /// UI callers that want real confirmation) so a step isn't treated as
+  /// done until it's actually verified.
+  Future<bool> setUsbConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
+      _setSocketConfirmed(usb: enable, timeout: timeout);
+  Future<bool> setAcConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
+      _setSocketConfirmed(ac: enable, timeout: timeout);
+  Future<bool> setDcConfirmed(bool enable, {Duration timeout = const Duration(seconds: 6)}) =>
+      _setSocketConfirmed(dc: enable, timeout: timeout);
 
-Future<bool> _setSocketConfirmed({
-  bool? usb,
-  bool? ac,
-  bool? dc,
-  required Duration timeout,
-}) async {
-  if (!isConnected) return false;
+  Future<bool> _setSocketConfirmed({
+    bool? usb,
+    bool? ac,
+    bool? dc,
+    required Duration timeout,
+  }) async {
+    if (!isConnected) return false;
 
-  // Mirror _setSocket's own merge logic to compute the exact mask it will
-  // write, computed *before* calling it so there's no race with status
-  // being mutated underneath us.
-  final desiredUsb = usb ?? status.isUsbOn;
-  final desiredAc = ac ?? status.isAcOn;
-  final desiredDc = dc ?? status.isDcOn;
-  var desiredMask = 0;
-  if (desiredUsb) desiredMask |= BleConstants.usbMask;
-  if (desiredAc) desiredMask |= BleConstants.acMask;
-  if (desiredDc) desiredMask |= BleConstants.dcMask;
+    // Mirror _setSocket's own merge logic to compute the exact mask it will
+    // write, computed *before* calling it so there's no race with status
+    // being mutated underneath us.
+    final desiredUsb = usb ?? status.isUsbOn;
+    final desiredAc = ac ?? status.isAcOn;
+    final desiredDc = dc ?? status.isDcOn;
+    var desiredMask = 0;
+    if (desiredUsb) desiredMask |= BleConstants.usbMask;
+    if (desiredAc) desiredMask |= BleConstants.acMask;
+    if (desiredDc) desiredMask |= BleConstants.dcMask;
 
-  final completer = Completer<bool>();
-  _pendingOutletCompleter = completer;
-  _pendingOutletDesiredMask = desiredMask;
+    final completer = Completer<bool>();
+    final entry = (completer, desiredMask);
+    _pendingOutletConfirmations.add(entry);
 
-  await _setSocket(usb: usb, ac: ac, dc: dc);
+    await _setSocket(usb: usb, ac: ac, dc: dc);
 
-  try {
-    return await completer.future.timeout(timeout, onTimeout: () {
+    bool confirmed;
+    try {
+      confirmed = await completer.future.timeout(timeout, onTimeout: () => false);
+    } finally {
+      _pendingOutletConfirmations.remove(entry);
+    }
+
+    if (!confirmed) {
       Log.w('BleService',
           'Outlet command not confirmed within ${timeout.inSeconds}s '
-          '(desired mask: 0x${desiredMask.toRadixString(16)})');
-      return false;
-    });
-  } finally {
-    if (identical(_pendingOutletCompleter, completer)) {
-      _pendingOutletCompleter = null;
-      _pendingOutletDesiredMask = null;
+          '(desired mask: 0x${desiredMask.toRadixString(16)}) — requesting '
+          'fresh status');
+      // Don't let the optimistic (possibly wrong) status _setSocket just
+      // set masquerade as truth for the rest of the manual-override window.
+      // Clear it immediately so the very next real packet is trusted again
+      // instead of being suppressed, and actively request a fresh
+      // broadcast rather than waiting up to keepaliveInterval for the
+      // station to send one on its own.
+      _lastManualCommandTime = DateTime.fromMillisecondsSinceEpoch(0);
+      unawaited(_writeData(BleConstants.requestStatusCommand));
     }
+
+    return confirmed;
   }
-}
 
   // ── Private ────────────────────────────────────────────────────────────────
   BluetoothCharacteristic? _readCharacteristic;
@@ -165,6 +177,10 @@ Future<void> pause() async {
   isConnected = false;
   isAutoConnecting = false;
   lastPacketTime = null;
+  for (final (completer, _) in _pendingOutletConfirmations) {
+    if (!completer.isCompleted) completer.complete(false);
+  }
+  _pendingOutletConfirmations.clear();
   _readCharacteristic = null;
   _writeCharacteristic = null;
   notifyListeners();
@@ -305,9 +321,10 @@ Future<void> resume() async {
   _notifySubscription = null;
   isConnected = false;
   lastPacketTime = null;
-  if (_pendingOutletCompleter?.isCompleted == false) {
-    _pendingOutletCompleter!.complete(false);
+  for (final (completer, _) in _pendingOutletConfirmations) {
+    if (!completer.isCompleted) completer.complete(false);
   }
+  _pendingOutletConfirmations.clear();
   _stopWatchdog();
   _stopKeepalive();
   isAutoConnecting = false;
@@ -340,6 +357,18 @@ Duration _backoffDelay(int attempt) {
   // ── Post-connect setup ─────────────────────────────────────────────────────
 
   Future<void> _setupConnectedDevice(BluetoothDevice device) async {
+    // FIX: defend against a "connected" event firing while we still think
+    // we're connected — e.g. the OS's autoConnect recovering the link
+    // directly without ever emitting a "disconnected" event first. Without
+    // cancelling any existing subscription first, a second call here layers
+    // a second listener on the same notify stream: every subsequent packet
+    // then gets parsed twice, and whichever listener runs first silently
+    // "wins" any pending outlet confirmation. This compounds over repeated
+    // reconnects until only a full app restart (a fresh BleService
+    // instance) clears it — which matches the "must restart to fix" symptom.
+    await _notifySubscription?.cancel();
+    _notifySubscription = null;
+
     stopScan();
     connectedDevice = device;
     isConnected = true;
@@ -449,11 +478,15 @@ Duration _backoffDelay(int attempt) {
       case StatusPacket packet:
   lastPacketTime = DateTime.now();
 
-  final pendingMask = _pendingOutletDesiredMask;
-  if (pendingMask != null &&
-      packet.socketMask == pendingMask &&
-      _pendingOutletCompleter?.isCompleted == false) {
-    _pendingOutletCompleter!.complete(true);
+  if (_pendingOutletConfirmations.isNotEmpty) {
+    _pendingOutletConfirmations.removeWhere((entry) {
+      final (completer, mask) = entry;
+      if (packet.socketMask == mask && !completer.isCompleted) {
+        completer.complete(true);
+        return true;
+      }
+      return false;
+    });
   }
 
   final newStatus = StatusPacketParser.applyToStatus(

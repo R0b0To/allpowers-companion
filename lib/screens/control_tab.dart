@@ -538,9 +538,9 @@ class _OutletSection extends StatelessWidget {
           isUsbOn: status.isUsbOn,
           isAcOn: status.isAcOn,
           isDcOn: status.isDcOn,
-          onToggleUsb: () => ble.setUsb(!status.isUsbOn),
-          onToggleAc: () => ble.setAc(!status.isAcOn),
-          onToggleDc: () => ble.setDc(!status.isDcOn),
+          onToggleUsb: () => ble.setUsbConfirmed(!status.isUsbOn),
+          onToggleAc: () => ble.setAcConfirmed(!status.isAcOn),
+          onToggleDc: () => ble.setDcConfirmed(!status.isDcOn),
         ),
       ],
     );

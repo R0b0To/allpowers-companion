@@ -23,6 +23,7 @@ import 'services/notification_service.dart';
 import 'services/tapo_device_service.dart';
 import 'services/tapo_service.dart';
 import 'services/webhook_service.dart';
+import 'utils/logger.dart';
 
 /// Owns every service and all cross-service coordination logic.
 ///
@@ -221,7 +222,9 @@ final class AppCoordinator extends ChangeNotifier {
       status: ble.isConnected ? ble.status : null,
     );
 
-    if (!ble.isConnected && mqttSettings.mode == AppMode.gateway) {
+    if (mqttSettings.mode != AppMode.gateway) return;
+
+    if (!ble.isConnected) {
       mqtt.publishStatus(ble.status, bleConnected: false);
 
       // FIX: reset throttle state so the first real status packet after
@@ -233,6 +236,18 @@ final class AppCoordinator extends ChangeNotifier {
       _lastAcState = null;
       _lastDcState = null;
       _lastUsbState = null;
+    } else {
+      // FIX: publish immediately on reconnect too, not just on disconnect.
+      // Without this, clients can sit on a stale bleConnected:false for up
+      // to 30s (until the next heartbeat tick) after the gateway already
+      // recovered — a reconnect packet with values identical to before the
+      // drop never triggers a publish via the normal change-detection path
+      // in _onBleStatus, since nothing about the *data* changed.
+      mqtt.publishStatus(ble.status, bleConnected: !ble.isStale);
+      _lastMqttPublishTime = DateTime.now();
+      _lastAcState = ble.status.isAcOn;
+      _lastDcState = ble.status.isDcOn;
+      _lastUsbState = ble.status.isUsbOn;
     }
   }
 
@@ -261,17 +276,25 @@ final class AppCoordinator extends ChangeNotifier {
 
   // ── MQTT callbacks ─────────────────────────────────────────────────────────
 
-  void _onMqttCommand(String outlet, bool value) {
-    if (mqttSettings.mode != AppMode.gateway) return;
-    if (!ble.isConnected) return;
-    switch (outlet) {
-      case 'usb':
-        ble.setUsb(value);
-      case 'ac':
-        ble.setAc(value);
-      case 'dc':
-        ble.setDc(value);
+  /// Handles both the fire-and-forget `<prefix>/cmd/+` topic and the
+  /// `outlet.set` RPC. Waits for the station's own status broadcast to
+  /// confirm the change actually took effect, rather than trusting the
+  /// characteristic write alone — a plug/relay can silently fail to apply
+  /// a command even when the BLE write itself succeeds.
+  Future<bool> _onMqttCommand(String outlet, bool value) async {
+    if (mqttSettings.mode != AppMode.gateway) return false;
+    if (!ble.isConnected) return false;
+    final confirmed = switch (outlet) {
+      'usb' => await ble.setUsbConfirmed(value),
+      'ac' => await ble.setAcConfirmed(value),
+      'dc' => await ble.setDcConfirmed(value),
+      _ => false,
+    };
+    if (!confirmed) {
+      Log.w('AppCoordinator',
+          'Outlet "$outlet" command not confirmed by station');
     }
+    return confirmed;
   }
 
   void _onTapoDevicesReceived(List<TapoDevice> devices) {
@@ -312,7 +335,11 @@ final class AppCoordinator extends ChangeNotifier {
       case RpcMethod.setOutlet:
         final outlet = params['outlet'] as String;
         final value = params['value'] as bool;
-        _onMqttCommand(outlet, value);
+        final confirmed = await _onMqttCommand(outlet, value);
+        if (!confirmed) {
+          throw StateError(
+              'Outlet "$outlet" was not confirmed by the station');
+        }
         return {'outlet': outlet, 'value': value};
 
       case RpcMethod.tapoSetOn:
