@@ -536,8 +536,16 @@ Duration _backoffDelay(int attempt) {
       return;
     }
     try {
-      await char.write(payload,
-          withoutResponse: char.properties.writeWithoutResponse);
+      // FIX: a "zombie" GATT connection (OS reports connected, link is
+      // actually dead — e.g. a second central took over the station's
+      // single connection slot) can leave a platform write call hanging
+      // indefinitely rather than throwing. Without this timeout, that write
+      // never resolves, which meant _setSocketConfirmed could hang forever
+      // too — it awaits this before it ever reaches its own confirmation
+      // timeout.
+      await char
+          .write(payload, withoutResponse: char.properties.writeWithoutResponse)
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       Log.e('BleService', 'Write failed', e);
     }
@@ -581,12 +589,34 @@ Duration _backoffDelay(int attempt) {
   /// forced disconnect: a missed broadcast tick from the station resolves
   /// itself the moment this fires, without tearing down and re-establishing
   /// the GATT connection.
+  ///
+  /// Unlike a plain [_writeData] call, this one *reacts* to a failed or
+  /// timed-out write by forcing a reconnect immediately — proof the link is
+  /// dead (e.g. another central took the station's single connection slot)
+  /// shouldn't have to wait out the full [BleConstants.staleConnectionThreshold]
+  /// elapsed-time check the watchdog otherwise relies on.
   void _startKeepalive() {
     _keepaliveTimer?.cancel();
     _keepaliveTimer = Timer.periodic(BleConstants.keepaliveInterval, (_) {
       if (!isConnected) return;
-      unawaited(_writeData(BleConstants.requestStatusCommand));
+      unawaited(_sendKeepaliveAndVerify());
     });
+  }
+
+  Future<void> _sendKeepaliveAndVerify() async {
+    final char = _writeCharacteristic;
+    if (char == null) return;
+    try {
+      await char
+          .write(BleConstants.requestStatusCommand,
+              withoutResponse: char.properties.writeWithoutResponse)
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      Log.w('BleService',
+          'Keepalive write failed — connection appears dead. '
+          'Forcing reconnect. ($e)');
+      unawaited(_forceReconnect());
+    }
   }
 
   void _stopKeepalive() {

@@ -162,7 +162,7 @@ final class AppCoordinator extends ChangeNotifier {
 
     _mqttHeartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mqttSettings.mode == AppMode.gateway && mqtt.isConnected) {
-        mqtt.publishStatus(ble.status, bleConnected: ble.isConnected);
+        mqtt.publishStatus(ble.status, bleConnected: ble.isConnected && !ble.isStale);
       }
     });
   }
@@ -477,6 +477,15 @@ final class AppCoordinator extends ChangeNotifier {
         .difference(flows.map((f) => f.id).toSet());
     for (final flow in updated.where((f) => addedIds.contains(f.id))) {
       await _flowEngine.init([flow]);
+    }
+
+
+    final oldById = {for (final f in flows) f.id: f};
+    for (final flow in updated) {
+      final old = oldById[flow.id];
+      if (old != null && !old.enabled && flow.enabled) {
+        _flowEngine.resetTriggeredForFlow(flow.id);
+      }
     }
 
     flows = updated;
