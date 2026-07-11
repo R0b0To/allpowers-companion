@@ -625,19 +625,23 @@ Duration _backoffDelay(int attempt) {
   }
 
 
-Future<void> _forceReconnect() async {
-  final device = connectedDevice;
-  if (device == null) return;
-  try {
-    await device.disconnect();
-  } catch (e) {
-    Log.w('BleService', 'Watchdog force-disconnect failed: $e');
-  }
+bool _forceReconnecting = false;
 
-  await Future<void>.delayed(const Duration(seconds: 3));
-  if (isConnected) {
-    Log.w('BleService', 'No disconnected event after forced disconnect — recovering manually');
-    _handleDisconnect(retry: true);
+Future<void> _forceReconnect() async {
+  if (_forceReconnecting) return;           // reentrancy guard
+  _forceReconnecting = true;
+  try {
+    final device = connectedDevice;
+    if (device == null) return;
+    try {
+      await device.disconnect().timeout(const Duration(seconds: 5));
+    } catch (e) {
+      Log.w('BleService', 'Watchdog force-disconnect failed: $e');
+    }
+    await Future<void>.delayed(const Duration(seconds: 3));
+    if (isConnected) _handleDisconnect(retry: true);
+  } finally {
+    _forceReconnecting = false;
   }
 }
 

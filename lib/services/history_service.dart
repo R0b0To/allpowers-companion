@@ -44,6 +44,9 @@ final class HistoryService extends ChangeNotifier {
       return;
     }
     _entries = [entry, ..._entries];
+if (_entries.length > HistoryRepository.maxEntries) {
+  _entries = _entries.sublist(0, HistoryRepository.maxEntries);
+}
     notifyListeners();
     await _repository.saveHistory(_entries);
   }
